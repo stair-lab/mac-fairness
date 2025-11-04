@@ -11,6 +11,7 @@ A lightweight, Slurm-compatible framework for running multi-agent conversations 
 - [Running Experiments](#running-experiments)
 - [Batch Processing](#batch-processing)
 - [Data Organization](#data-organization)
+- [Benchmark Formatting](#benchmark-formatting)
 - [Extending the Framework](#extending-the-framework)
 - [Schema Versioning](#schema-versioning)
 
@@ -24,14 +25,17 @@ uv venv
 source .venv/bin/activate
 uv pip install -e .
 
-# 2. Set experiments directory (optional - defaults to <workspace>/experiments)
+# 2. Set experiments directory (recommended, otherwise defaults to <workspace>/experiment)
 export PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT="/shared/experiments/mac_fairness"
 
-# 3. Run an experiment (all questions with same agents)
-python scripts/run_experiment.py config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
+# 3. Run an experiment locally or submit to Slurm
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml
+
+# Or submit to Slurm (saves snapshot immediately at queuing time)
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
 
 # 4. Query results
-python scripts/query_conversations.py --benchmark bbq_race
+python script/query_transcripts.py --benchmark bbq_race
 ```
 
 ---
@@ -44,36 +48,36 @@ python scripts/query_conversations.py --benchmark bbq_race
 ├── README.md
 ├── pyproject.toml                          # Project dependencies
 │
-├── schemas/                                # Protocol schemas (versioned)
+├── schema/                                 # Protocol schemas (versioned)
 │   ├── index.json                          # Schema version registry
-│   └── 2025-11-03/                         # Current protocol version
-│       ├── conversation.schema.json
-│       ├── metadata.schema.json
-│       ├── agent.schema.json
-│       ├── message.schema.json
-│       ├── question.schema.json
-│       ├── routing.schema.json
-│       └── structured_output.schema.json
+│   └── 2025-11-03/                         # Current protocol version (follows MCP convention)
+│       ├── conversation.schema.json        # Full conversation transcript validation
+│       ├── metadata.schema.json            # Metadata validation
+│       ├── agent.schema.json               # Agent configuration validation
+│       ├── message.schema.json             # Individual message validation
+│       ├── question.schema.json            # Question format validation
+│       ├── routing.schema.json             # Routing strategy validation
+│       └── structured_output.schema.json   # Agent output validation (model-agnostic)
 │
 ├── bookkeeping/                            # Experiment metadata and snapshots (auto saved, do NOT edit)
 │   ├── index.json                          # Single searchable index of all experiments
-│   └── experiments_config_snapshot/        # Immutable config snapshots from submitted jobs
+│   └── config_snapshot/                    # Immutable config snapshots from submitted jobs
 │       └── {benchmark}/                    # Organized by benchmark subcategories, e.g., bbq_race
-│           ├── llama3_8b_3agent_race_2025-11-03.yaml
-│           ├── qwen2_7b_5agent_gender_2025-11-04.yaml
-│           └── gemma_2b_4agent_mixed_2025-11-05.yaml
+│           ├── llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml
+│           ├── llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T150000Z.yaml
+│           └── qwen2_7b_5agent_as-ai-demographics-persona_vanilla_v2025-11-03_20251105T093000Z.yaml
 │
-├── experiments/                            # Default transcript storage (if env var not set)
+├── experiment/                             # Default transcript storage (if env var not set)
 │   └── {benchmark}/
 │       └── {experiment_name}/
-│           └── transcripts/                # Containing conversation transcripts for Qs
+│           └── transcript/                 # Containing conversation transcripts for Qs
 │               └── {uuid}.json
 │
 ├── config/                                 # Working configuration files (edit config scratch here)
 │   └── {benchmark}/                        # Organized by benchmark
-│       ├── llama3_8b_3agent_race_2025-11-03_scratch.yaml
-│       ├── qwen2_7b_5agent_gender_2025-11-04_scratch.yaml
-│       └── gemma_2b_4agent_mixed_2025-11-05_scratch.yaml
+│       ├── llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml
+│       ├── qwen2_7b_5agent_as-ai-demographics-persona_vanilla_v2025-11-03_scratch.yaml
+│       └── gemma_2b_4agent_as-human-persona_vanilla_v2025-11-03_scratch.yaml
 │
 ├── data/                                   # Benchmark questions (separated according to subcategories)
 │   ├── bbq_race.jsonl
@@ -81,7 +85,7 @@ python scripts/query_conversations.py --benchmark bbq_race
 │   └── discrimeval_gender.jsonl
 │
 ├── src/                                    # Source code
-│   ├── agents/                             # Agent implementations
+│   ├── agent/                              # Agent implementations
 │   │   ├── base_agent.py
 │   │   ├── vllm_agent.py
 │   │   └── model_factory.py
@@ -100,16 +104,14 @@ python scripts/query_conversations.py --benchmark bbq_race
 │   └── utils/                              # Utilities
 │       └── model_loader.py
 │
-├── scripts/                                # Executable scripts
-│   ├── run_experiment.py                   # Run full experiment (all questions)
-│   ├── query_conversations.py              # Query index
-│   └── validate_transcript.py              # Schema validator
-│
-└── tests/                                  # Unit and integration tests
-    ├── test_agents.py
-    ├── test_routing.py
-    ├── test_output_validation.py
-    └── test_conversation.py
+└── script/                                 # Executable scripts
+    ├── run_experiment.py                   # Run full experiment (all questions)
+    ├── query_transcripts.py                # Query index
+    ├── validate_transcript.py              # Schema validator
+    └── formatters/                         # Benchmark data formatters
+        ├── bbq_formatter.py                # Format BBQ benchmark to JSONL
+        ├── discrimeval_formatter.py        # Format DiscrimEval benchmark to JSONL
+        └── utils.py                        # Shared formatting utilities
 ```
 
 ### Directory Purposes
@@ -118,15 +120,18 @@ python scripts/query_conversations.py --benchmark bbq_race
 
 - **`src/conversation/manager.py`**: Orchestrates entire experiments
   - Loads and validates experiment configurations
-  - Saves immutable config snapshots to `bookkeeping/experiments_config_snapshot/{benchmark}/`
+  - Saves immutable config snapshots to `bookkeeping/config_snapshot/{benchmark}/` with timestamps
+  - Snapshot naming: `{experiment_name}_{TIMESTAMP}.yaml` (e.g., `llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml`)
+  - For Slurm jobs: snapshot saved at queuing time (before job runs)
+  - For local execution: snapshot saved at start time (before execution begins)
   - Manages agent initialization and conversation rounds
   - Saves full conversation transcripts
   - Calls `IndexManager` to update the searchable index after completion
 
 - **`src/conversation/index_manager.py`**: Pure bookkeeping and metadata management
   - Manages the `bookkeeping/index.json` file with thread-safe operations
-  - Adds conversation metadata after each experiment completes
-  - Provides query interface for finding conversations
+  - Adds transcript metadata after each experiment completes
+  - Provides query interface for finding transcripts
   - Handles only lightweight metadata (no full transcripts)
   - Ensures concurrent jobs don't corrupt the index
 
@@ -138,21 +143,27 @@ python scripts/query_conversations.py --benchmark bbq_race
   - Version-controlled but expected to change between jobs
   - Edit these freely after jobs are submitted
 
-- **`bookkeeping/`**: Runtime metadata and config snapshots (what has been run)
+- **`bookkeeping/`**: Runtime metadata and config snapshots (what has been submitted/run)
   - `index.json`: Lightweight searchable index of all experiments
-  - `experiments_config_snapshot/{benchmark}/`: Immutable snapshots organized by benchmark
-  - Generated automatically when a job is submitted (even if currently in queue)
+  - `config_snapshot/{benchmark}/`: Immutable snapshots organized by benchmark
+  - Each snapshot timestamped: `{experiment_name}_{TIMESTAMP}.yaml` (Zulu time format)
+  - **For Slurm**: Generated immediately at submission time (queuing time, before job runs)
+  - **For local**: Generated at start of execution (before processing questions)
   - Always stored under `<workspace>` for reproducibility and fast access
+  - Multiple submissions of same experiment name get unique snapshots via timestamps
 
-- **`experiments/`**: Full transcript output (actual conversation data)
+- **`experiment/`**: Full transcript output (actual conversation data)
   - Contains complete conversation transcripts in JSON format
   - Can be stored elsewhere via `$PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT`
   - Large files with full agent responses and metadata
 
 This three-way separation ensures:
 
-1. **Working configs** (`config/*_scratch.yaml`) can be freely edited without affecting queuing/running/completed jobs
-2. **Config snapshots** (`bookkeeping/experiments_config_snapshot/`) provide exact reproducibility
+1. **Working configs** (`config/*_scratch.yaml`) can be freely edited after submission without affecting queued/running jobs
+2. **Config snapshots** (`bookkeeping/config_snapshot/`) provide exact reproducibility
+   - Timestamped: Multiple runs with same experiment name won't overwrite
+   - For Slurm: Captured at queuing time, safe to edit scratch immediately
+   - For local: Captured at start time, ensuring consistency throughout execution
 3. **Bookkeeping** provides fast local search without accessing large transcript files
 4. **Transcripts** can be stored on shared/remote storage while keeping metadata local
 
@@ -181,21 +192,21 @@ uv pip install -e .
 Each experiment configuration defines the agent setup and routing strategy that will be applied to ALL questions in a benchmark run:
 
 ```yaml
-# config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
+# config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml
 experiment:
   # Experiment identification
-  experiment_name: llama3_8b_3agent_race_2025-11-03
+  experiment_name: llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03
   benchmark_name: bbq_race
 
   # Questions source (separate file with all benchmark questions)
   questions_file: data/bbq_race.jsonl
 
   # Experiment parameters (apply to all questions)
-  social_categories: [race]
-  max_rounds: 5
+  agent_config_axes: [as_human, demographics]  # See agent definitions below (always include as_human since it is always not null)
+  max_rounds: 3
   routing_strategy: vanilla
 
-  # Optional: Use same model for all agents (saves GPU memory)
+  # Recommended (protocol version 2025-11-03): Use same model for all agents (saves GPU memory)
   shared_model_backbone: llama-3-8b
 
   # Agent definitions (same agents for all questions)
@@ -205,7 +216,7 @@ experiment:
       persona: doctor
       demographics: black
       as_human: true
-      model: llama-3-8b  # Ignored if shared_model_backbone is set
+      model: shared  # Uses shared_model_backbone
       temperature: 0.7
       max_tokens: 512
 
@@ -214,7 +225,7 @@ experiment:
       persona: doctor
       demographics: white
       as_human: true
-      model: llama-3-8b
+      model: shared  # Uses shared_model_backbone
       temperature: 0.7
       max_tokens: 512
 
@@ -223,11 +234,12 @@ experiment:
       persona: policy_expert
       demographics: null
       as_human: true
-      model: llama-3-8b
+      model: shared  # Uses shared_model_backbone
       temperature: 0.5
       max_tokens: 512
 
-  # Model definitions (inline, no external references)
+  # Model definitions: Define HOW to load models (path, vLLM configs)
+  # The shared_model_backbone above specifies WHICH model to use for all agents
   models:
     llama-3-8b:
       family: llama
@@ -238,6 +250,56 @@ experiment:
         max_model_len: 4096
         dtype: float16
 ```
+
+### What You Configure vs What's Automatic
+
+**You only need to edit the config YAML** - everything else is handled automatically:
+
+#### Manual Configuration (Edit Once)
+
+1. **Config YAML** (`config/{benchmark}/*_scratch.yaml`):
+   - `experiment_name` - following the naming convention
+   - `benchmark_name` - which benchmark to run
+   - `questions_file` - path to JSONL questions
+   - `agent_config_axes` - what you're varying
+   - `max_rounds`, `routing_strategy` - experiment parameters
+   - `shared_model_backbone` - which model to use
+   - `agents` - agent definitions with roles, personas, demographics
+   - `models` - model loading configurations
+
+2. **Environment Variable** (Recommended):
+   ```bash
+   export PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT="/shared/experiments"
+   # If not set, defaults to <workspace>/experiment
+   ```
+
+#### Automatic (Framework Handles)
+
+- **Timestamped config snapshots**: `{experiment_name}_{TIMESTAMP}.yaml`
+  - Auto-generated at submission (Slurm) or start time (local)
+  - Prevents overwrites on multiple submissions
+- **UUID generation**: Unique IDs for each transcript (e.g., `550e8400-e29b-41d4-a716-446655440000.json`)
+- **Directory creation**: All `bookkeeping/` and `experiment/` subdirectories
+- **Index updates**: `bookkeeping/index.json` updated with metadata after each conversation
+- **Timestamp tracking**: Both `submission_timestamp` and `execution_timestamp` recorded
+
+#### Your Workflow
+
+```bash
+# 1. Edit config YAML (ONLY thing you edit)
+vim config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml
+
+# 2. Run (everything else automatic)
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml
+
+# Framework automatically:
+# - Creates timestamped snapshot: bookkeeping/config_snapshot/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml
+# - Generates UUIDs for transcripts
+# - Updates index.json
+# - Creates all necessary directories
+```
+
+**No script modification needed** for standard usage!
 
 ### Questions File Format
 
@@ -254,20 +316,39 @@ Questions are stored separately in JSONL format (one question per line):
 
 All experiments follow a consistent naming scheme:
 
-`{model_abbr}_{n_agents}agent_{addon_spec}_{DATE}`
+`{model_abbr}_{n_agents}agent_as-{human|ai|hybrid}-{varied_axes}_{routing_strategy}_{PROTOCOL_VERSION}`
+
+**You set this manually** in the config YAML (`experiment_name` field).
 
 Examples:
 
-- `llama3_8b_3agent_race_2025-11-03`
-- `qwen2_7b_5agent_gender_2025-11-04`
-- `gemma_2b_4agent_race_and_gender_2025-11-05`
+- `llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03` (all agents as humans, varying demographics)
+- `qwen2_7b_5agent_as-ai-demographics-persona_vanilla_v2025-11-03` (all agents as AI, varying demographics and persona)
+- `gemma_2b_4agent_as-hybrid-persona_vanilla_v2025-11-03` (mixed human/AI agents, varying persona)
 
-Components:
+Components (Manual - you choose):
 
 - **model_abbr**: Short model identifier (e.g., `llama3_8b`)
 - **n_agents**: Number of agents (assumes < 100)
-- **addon_spec**: Social categories or experimental condition
-- **DATE**: ISO format date (YYYY-MM-DD)
+- **as-{human|ai|hybrid}-{varied_axes}**: Agent configuration specification (hyphen-separated)
+  - `as-human`, `as-ai`, or `as-hybrid`: Conversation-level agent presentation mode (always present)
+    - `as-human` if all agents have `as_human: true` (all presented as human actors)
+    - `as-ai` if all agents have `as_human: false` (all presented as AI assistants)
+    - `as-hybrid` if agents have mixed `as_human` values (some human, some AI)
+  - **varied_axes**: What other axes are varied, hyphen-separated
+    - Possible values: `demographics`, `persona`, or combinations like `demographics-persona`
+    - Only include axes that are actually varied (have different non-null values across agents)
+    - Note: This is different from benchmark category (e.g., bbq_race, bbq_gender)
+- **routing_strategy**: Routing strategy (e.g., `vanilla`)
+- **PROTOCOL_VERSION**: Protocol version with 'v' prefix (e.g., `v2025-11-03`)
+  - The 'v' prefix distinguishes protocol version from modification dates
+  - References schema directory `schema/2025-11-03/` (which follows MCP convention without 'v')
+
+**Automatic additions** by the framework:
+- **Config snapshots**: `{experiment_name}_{TIMESTAMP}.yaml` (e.g., `llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml`)
+  - Timestamp added automatically at submission/start time
+  - Prevents overwrites when submitting same experiment multiple times
+- **Transcript files**: Named by auto-generated UUID (e.g., `550e8400-e29b-41d4-a716-446655440000.json`)
 
 ### Agent Configuration
 
@@ -308,97 +389,209 @@ Agents are displayed in conversation context as:
 **speaker 003 | a person**: Neutral perspective on implementation...
 ```
 
+### Routing Mechanism
+
+The routing strategy controls conversation flow: who speaks when, and what message history each agent can see.
+
+#### Round-Based Conversation Flow
+
+Conversations proceed in **rounds**, with each round allowing all agents to speak:
+
+```
+Round 0: All agents respond to the initial question (no prior messages visible)
+Round 1: All agents respond seeing messages from Round 0
+Round 2: All agents respond seeing messages from Rounds 0-1
+...
+Round N: Continues until max_rounds reached
+```
+
+**Key properties:**
+- **Within a round**: Agents speak sequentially in the order defined in the config
+- **Between rounds**: All agents see the same history (determined by routing strategy)
+- **No interruption**: An agent cannot interrupt another agent mid-round
+
+#### Vanilla Routing Strategy
+
+The default `vanilla` routing strategy implements full visibility:
+
+**Speaking order:**
+- Agents speak in the order listed in the config (speaker_001, speaker_002, speaker_003, ...)
+- Same order maintained across all rounds
+
+**Message visibility:**
+- **Round 0**: Agents see only the initial question (no prior agent messages)
+- **Round 1+**: Agents see **all messages** from **all previous rounds**
+  - Example: In Round 2, agents see all messages from Rounds 0 and 1
+
+**Example conversation flow (3 agents, 2 rounds):**
+
+```yaml
+# Round 0
+Question: "Should we implement universal healthcare?"
+- speaker_001 (black doctor) responds → Message M1
+- speaker_002 (white doctor) responds → Message M2
+- speaker_003 (policy expert) responds → Message M3
+
+# Round 1
+All agents now see: Question + [M1, M2, M3]
+- speaker_001 responds → Message M4
+- speaker_002 responds → Message M5
+- speaker_003 responds → Message M6
+
+# Round 2 (if max_rounds >= 3)
+All agents now see: Question + [M1, M2, M3, M4, M5, M6]
+- speaker_001 responds → Message M7
+- speaker_002 responds → Message M8
+- speaker_003 responds → Message M9
+```
+
+#### Custom Routing Strategies
+
+You can implement custom routing strategies to control visibility differently:
+
+**Partial visibility examples:**
+- **Last round only**: Agents see only messages from the immediately previous round
+- **Role-based**: Agents see only messages from agents with the same role
+- **Selective**: Agents see only messages explicitly routed to them
+
+See the [Extending the Framework](#extending-the-framework) section for implementation details.
+
+**Configuration:**
+
+```yaml
+experiment:
+  routing_strategy: vanilla  # or custom strategy name
+  max_rounds: 3              # Maximum conversation rounds
+```
+
 ### Shared Model Backbone
 
 To optimize GPU memory usage, configure all agents to use the same model instance:
 
 ```yaml
-shared_model_backbone: llama-3-8b  # All agents share this model
+shared_model_backbone: llama-3-8b  # References which model definition to use
+agents:
+  - agent_id: speaker_001
+    model: shared  # Uses shared_model_backbone
+    temperature: 0.7
+
+models:
+  llama-3-8b:  # Model definition: HOW to load the model
+    family: llama
+    model_path: meta-llama/Meta-Llama-3-8B-Instruct
 ```
+
+**How it works:**
+- `models:` section defines model configurations (path, vLLM settings)
+- `shared_model_backbone:` specifies which model definition to load (once)
+- `agents[].model: shared` tells agents to use the shared backbone
 
 Benefits:
 
 - **Memory efficiency**: One model instance instead of N
 - **Faster startup**: Single model initialization
 - **Different sampling**: Agents can still have different temperatures
+- **Clear configuration**: Model details defined once, referenced by name
+
+**Important: Sampling parameters vs context window**
+
+- **Per-agent sampling** (`temperature`, `max_tokens`): Applied during output generation
+  - Different agents can use different values
+  - **No model reloading required** - these are lightweight sampling-time parameters
+  - Controls HOW tokens are selected from the model's output distribution
+- **Shared context window** (`max_model_len` in vLLM config): Model-level setting
+  - Set once when loading the model
+  - Determines maximum input + output length
+  - This is what consumes GPU memory
+
+```yaml
+# Example: Same model, different sampling behaviors
+agents:
+  - agent_id: speaker_001
+    model: shared
+    temperature: 0.7    # More creative/random
+    max_tokens: 512
+
+  - agent_id: speaker_002
+    model: shared
+    temperature: 0.3    # More focused/deterministic
+    max_tokens: 256     # Shorter responses
+
+models:
+  llama-3-8b:
+    vllm_config:
+      max_model_len: 4096  # Shared context window for both agents
+```
 
 ---
 
 ## Running Experiments
 
-### Running a Full Experiment
+### Unified Workflow for Local and Slurm
+
+The framework provides a unified interface for both local execution and Slurm submission:
 
 ```bash
-# Process all questions in benchmark with same agent configuration
-python scripts/run_experiment.py config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
+# Run locally (snapshot saved at start, then executed immediately)
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml
 
-# Or process specific question range (e.g., if need to look at specific Qs)
-python scripts/run_experiment.py config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml --range 1-10
+# Submit to Slurm (snapshot saved at queuing time, safe to edit scratch file immediately after)
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
+
+# Process specific question range (useful for testing or array jobs)
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --range 1-10
 
 # With environment variable for transcript storage
 export PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT="/shared/experiments"
-python scripts/run_experiment.py config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
 ```
 
-The script will:
+### Execution Flow
 
-1. Load the experiment configuration (agents, routing, models)
-2. **Save a snapshot** to `bookkeeping/experiments_config_snapshot/{benchmark}/{experiment_name}.yaml`
+**For local execution** (default):
+1. Load and save config snapshot to `bookkeeping/config_snapshot/{benchmark}/{experiment_name}_{TIMESTAMP}.yaml`
+2. Load the snapshot (not scratch file) for execution
 3. Read questions from the specified JSONL file
 4. Initialize models once using vLLM
 5. Run each question with the same agent configuration
-6. Save transcripts to `{EXPERIMENTS_ROOT}/{benchmark}/{experiment_name}/transcripts/{uuid}.json`
-7. Update `bookkeeping/index.json` with metadata for each conversation
+6. Save transcripts to `{EXPERIMENTS_ROOT}/{benchmark}/{experiment_name}/transcript/{uuid}.json`
+7. Update `bookkeeping/index.json` with metadata for each transcript (includes snapshot timestamp)
 
-**Important Workflow Note:**
+**For Slurm submission** (`--mode slurm`):
+1. **Save config snapshot immediately** with timestamp (at queuing time, before job starts)
+2. Generate Slurm job script that uses the timestamped snapshot
+3. Submit job to Slurm queue
+4. **You can now safely edit the scratch file** without affecting the queued job
+5. When job runs, it uses the snapshot (steps 2-7 above)
 
-There are two approaches for config snapshot timing:
-
-**Option 1 (Illustrative Purpose Only): Snapshot on Job Start** (default `run_experiment.py` behavior)
-
-- Config snapshot is saved when the Python script starts executing
-- If job is queued, changes to scratch file WILL affect it until it starts
-- Simple but requires care when multiple jobs are queued
-
-**Option 2: Snapshot on Job Submission** (recommended for queued jobs)
-
-- Use `scripts/submit_experiment.sh` wrapper instead of direct sbatch
-- Config snapshot is saved immediately upon submission
-- Job uses the snapshot even while queued
-- You can immediately edit the scratch file without affecting queued jobs
+**Key advantage**: Config snapshot is saved at submission time for Slurm jobs, allowing you to:
+- Queue multiple jobs with the same config file name
+- Edit the scratch file immediately after submission
+- Ensure each job uses exactly the config it was submitted with
 
 ```bash
-# Option 1 (Illustrative Purpose Only): Direct submission (snapshot when job RUNS)
-# sbatch job.sh  # Uses config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
-# Warning: Changes to scratch file affect job until it starts running!
+# Example: Submit multiple jobs, editing config between submissions
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
+# -> Saves: bookkeeping/config_snapshot/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml
 
-# Option 2: Wrapper script (snapshot when job SUBMITTED) - RECOMMENDED
-./scripts/submit_experiment.sh config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
-# -> Snapshot saved immediately to bookkeeping/experiments_config_snapshot/bbq_race/
-# -> You can now safely edit the scratch file!
+# Snapshot saved immediately! Now safe to edit:
+vim config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml  # Change parameters
 
-# After submission with Option 2:
-vim config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml  # Safe to edit immediately
-./scripts/submit_experiment.sh config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml  # Submit another
+# Submit another job with updated config
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
+# -> Saves: bookkeeping/config_snapshot/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T150000Z.yaml
 ```
 
-### Slurm Submission
+### Custom Slurm Parameters
 
-Since we're using Option 2 (immediate config snapshots), use the wrapper script:
+For custom SLURM parameters (GPU type, memory, time limits), modify the default parameters in `script/run_experiment.py` or pass them via environment variables:
 
 ```bash
-# Direct submission using wrapper script (RECOMMENDED)
-./scripts/submit_experiment.sh config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
+export SLURM_GPUS="a100:1"
+export SLURM_MEM="32G"
+export SLURM_TIME="4:00:00"
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
 ```
-
-The wrapper script automatically:
-
-1. Saves config snapshot immediately
-2. Creates appropriate Slurm job script
-3. Submits job using the snapshot (not scratch file)
-4. Allows immediate editing of scratch file
-
-For custom SLURM parameters, modify `scripts/submit_experiment.sh` defaults or create your own wrapper.
 
 ---
 
@@ -409,59 +602,54 @@ For custom SLURM parameters, modify `scripts/submit_experiment.sh` defaults or c
 Since each experiment runs the same agent configuration across all questions, batch processing is built-in:
 
 ```bash
-# Process all questions in benchmark (using wrapper for immediate snapshot)
-./scripts/submit_experiment.sh config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml
+# Process all questions in benchmark on Slurm
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --mode slurm
 
 # For testing specific ranges locally (without Slurm)
-python scripts/run_experiment.py config/bbq_race/llama3_8b_3agent_race_2025-11-03_scratch.yaml --range 1-10
+python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml --range 1-10
 ```
 
 ### Slurm Array Jobs
 
-For very large benchmarks, you'll need to create a custom array job wrapper:
+For very large benchmarks, you can use array jobs with the `--array` flag:
 
 ```bash
-#!/bin/bash
-# scripts/submit_array_experiment.sh
-#SBATCH --array=1-10
-#SBATCH --gres=gpu:1
+# Submit array job: 10 tasks, each processing 100 questions
+python script/run_experiment.py \
+  config/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_scratch.yaml \
+  --mode slurm \
+  --array 1-10 \
+  --questions-per-task 100
 
-CONFIG_FILE="$1"
-WORKSPACE_ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
-
-# Extract experiment info and save snapshot ONCE (only on first array task)
-if [ "$SLURM_ARRAY_TASK_ID" -eq "1" ]; then
-    # Save config snapshot (same logic as submit_experiment.sh)
-    # ... snapshot saving code ...
-fi
-
-# Each array task processes 100 questions
-START=$((($SLURM_ARRAY_TASK_ID - 1) * 100 + 1))
-END=$(($SLURM_ARRAY_TASK_ID * 100))
-
-# Use the snapshot for execution
-python $WORKSPACE_ROOT/scripts/run_experiment.py \
-  "$SNAPSHOT_FILE" \
-  --range ${START}-${END}
+# Each array task will process:
+# Task 1: questions 1-100
+# Task 2: questions 101-200
+# ...
+# Task 10: questions 901-1000
 ```
 
-Submit array jobs with: `sbatch scripts/submit_array_experiment.sh config/bbq_race/experiment_scratch.yaml`
+The script automatically:
+- Saves config snapshot once with timestamp before submitting the array
+- Distributes questions across array tasks
+- Each task saves its transcripts independently
+- All tasks update the same index file (thread-safe)
+- All tasks reference the same timestamped config snapshot
 
 ### Performance Optimization
 
 The framework automatically optimizes batch processing:
 
 - **Model reuse**: Models loaded once and reused for all questions
-- **Incremental saving**: Each conversation saved immediately (fault-tolerant)
+- **Incremental saving**: Each transcript saved immediately (fault-tolerant)
 - **vLLM optimization**: Continuous batching and KV cache reuse
 
-Choose strategy based on scale (may adjust the number of q/job, depending on how long the job takes):
+Choose strategy based on scale (adjust questions per task based on job duration):
 
 | Questions | Strategy | Command |
 |-----------|----------|---------|
-| <= 100 | Single job | `./scripts/submit_experiment.sh config/benchmark/experiment_scratch.yaml` |
-| 100-500 | Array jobs (100q/job) | `sbatch scripts/submit_array_experiment.sh config/benchmark/experiment_scratch.yaml` |
-| > 500 | Array jobs (200q/job) | Modify array script for 200q/job, then submit |
+| <= 100 | Single job | `python script/run_experiment.py config/benchmark/experiment_scratch.yaml --mode slurm` |
+| 100-500 | Array jobs (100q/job) | `python script/run_experiment.py config/benchmark/experiment_scratch.yaml --mode slurm --array 1-5 --questions-per-task 100` |
+| > 500 | Array jobs (200q/job) | `python script/run_experiment.py config/benchmark/experiment_scratch.yaml --mode slurm --array 1-N --questions-per-task 200` |
 
 ---
 
@@ -474,18 +662,21 @@ The framework separates metadata from full transcripts:
 ```
 <workspace>/
 ├── bookkeeping/
-│   └── index.json                    # Lightweight metadata (always local)
+│   ├── index.json                    # Lightweight metadata (always local)
+│   └── config_snapshot/              # Timestamped config snapshots
+│       └── {benchmark}/
+│           └── {experiment_name}_{TIMESTAMP}.yaml
 │
-└── experiments/                       # Full transcripts (local default)
+└── experiment/                        # Full transcripts (local default)
     └── {benchmark}/
         └── {experiment_name}/
-            └── transcripts/
+            └── transcript/
                 └── {uuid}.json
 
 ${PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT}/  # Full transcripts (if env var set)
 └── {benchmark}/
     └── {experiment_name}/
-        └── transcripts/
+        └── transcript/
             └── {uuid}.json
 ```
 
@@ -493,45 +684,46 @@ ${PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT}/  # Full transcripts (if env var set)
 
 - Metadata stays local for fast queries, transcripts can be on shared/scratch storage
 - Transcript files named by UUID only (e.g., `550e8400-e29b-41d4-a716-446655440000.json`)
+- Config snapshots timestamped to prevent overwrites on multiple submissions
 - Question ID mapping maintained in index for fast lookup without special character issues
 
-### Querying Conversations
+### Querying Transcripts
 
 Use the query script with advanced filtering capabilities:
 
 ```bash
 # By benchmark
-python scripts/query_conversations.py --benchmark bbq_race
+python script/query_transcripts.py --benchmark bbq_race
 
 # By date
-python scripts/query_conversations.py --date 2025-11-03
+python script/query_transcripts.py --date 2025-11-03
 
-# By social category
-python scripts/query_conversations.py --category race
+# By benchmark category (e.g., bbq_race -> race)
+python script/query_transcripts.py --category race
 
 # By experiment
-python scripts/query_conversations.py --experiment llama3_8b_3agent_race_2025-11-03
+python script/query_transcripts.py --experiment llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03
 
 # By number of agents
-python scripts/query_conversations.py --n-agents 3
-python scripts/query_conversations.py --n-agents-range 3-5  # 3 to 5 agents
+python script/query_transcripts.py --n-agents 3
+python script/query_transcripts.py --n-agents-range 3-5  # 3 to 5 agents
 
 # By model family
-python scripts/query_conversations.py --model-family llama
-python scripts/query_conversations.py --model-family qwen
+python script/query_transcripts.py --model-family llama
+python script/query_transcripts.py --model-family qwen
 
 # By specific model
-python scripts/query_conversations.py --model llama-3-8b
+python script/query_transcripts.py --model llama-3-8b
 
 # Combined filters (AND logic)
-python scripts/query_conversations.py \
+python script/query_transcripts.py \
   --benchmark bbq_race \
   --category race \
   --n-agents 3 \
   --model-family llama
 
 # Export results to JSON
-python scripts/query_conversations.py \
+python script/query_transcripts.py \
   --benchmark bbq_race \
   --export results.json
 ```
@@ -540,22 +732,36 @@ python scripts/query_conversations.py \
 
 The single index file (`bookkeeping/index.json`) contains all metadata:
 
+**Key fields:**
+- `submission_timestamp`: When the job was submitted (saved in config snapshot filename)
+- `execution_timestamp`: When the conversation actually ran
+- `protocol_version`: Schema version (e.g., "2025-11-03")
+- `routing_strategy`: Routing strategy used (e.g., "vanilla", "role_based", "last_round")
+- `agent_config_axes`: What agent attributes are varied (always includes "as_human" since it's always defined)
+  - Examples: `["as_human", "demographics"]`, `["as_human", "demographics", "persona"]`
+- `shared_model_backbone`: Which model definition is used by all agents
+- `agents[].model`: Set to "shared" when using shared backbone
+- `agents[].temperature`, `max_tokens`: Agent-specific sampling parameters
+
 ```json
 {
   "version": "1.0.0",
-  "last_updated": "2025-11-03T12:00:00Z",
-  "conversations": [
+  "last_updated": "2025-11-04T15:30:00Z",
+  "transcripts": [
     {
-      "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
-      "experiment_name": "llama3_8b_3agent_race_2025-11-03",
+      "transcript_id": "550e8400-e29b-41d4-a716-446655440000",
+      "experiment_name": "llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03",
       "benchmark_name": "bbq_race",
       "question_id": "042",
-      "social_categories": ["race"],
-      "date": "2025-11-03",
-      "transcript_path": "/shared/experiments/bbq_race/llama3_8b_3agent_race_2025-11-03/transcripts/550e8400-e29b-41d4-a716-446655440000.json",
-      "config_snapshot_path": "bookkeeping/experiments_config_snapshot/bbq_race/llama3_8b_3agent_race_2025-11-03.yaml",
+      "agent_config_axes": ["as_human", "demographics"],
+      "submission_timestamp": "2025-11-04T12:00:00Z",
+      "execution_timestamp": "2025-11-04T12:15:00Z",
+      "transcript_path": "/shared/experiment/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03/transcript/550e8400-e29b-41d4-a716-446655440000.json",
+      "config_snapshot_path": "bookkeeping/config_snapshot/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml",
+      "protocol_version": "2025-11-03",
+      "routing_strategy": "vanilla",
       "n_agents": 3,
-      "addon_spec": "race",
+      "shared_model_backbone": "llama-3-8b",
       "agents": [
         {
           "agent_id": "speaker_001",
@@ -563,7 +769,9 @@ The single index file (`bookkeeping/index.json`) contains all metadata:
           "persona": "doctor",
           "demographics": "black",
           "as_human": true,
-          "model": "llama-3-8b"
+          "model": "shared",
+          "temperature": 0.7,
+          "max_tokens": 512
         },
         {
           "agent_id": "speaker_002",
@@ -571,7 +779,9 @@ The single index file (`bookkeeping/index.json`) contains all metadata:
           "persona": "doctor",
           "demographics": "white",
           "as_human": true,
-          "model": "llama-3-8b"
+          "model": "shared",
+          "temperature": 0.7,
+          "max_tokens": 512
         },
         {
           "agent_id": "speaker_003",
@@ -579,7 +789,9 @@ The single index file (`bookkeeping/index.json`) contains all metadata:
           "persona": "policy_expert",
           "demographics": null,
           "as_human": true,
-          "model": "llama-3-8b"
+          "model": "shared",
+          "temperature": 0.5,
+          "max_tokens": 512
         }
       ],
       "metadata": {
@@ -595,41 +807,165 @@ The single index file (`bookkeeping/index.json`) contains all metadata:
 
 ---
 
-## (Come Back to This Later) Extending the Framework
+## Benchmark Formatting
+
+### Converting Benchmarks to JSONL
+
+Formatters in `script/formatters/` convert different benchmark datasets into the standardized JSONL format required by the framework:
+
+```bash
+# Format BBQ benchmark
+python script/formatters/bbq_formatter.py \
+  --input raw_data/bbq_race.csv \
+  --output data/bbq_race.jsonl
+
+# Format DiscrimEval benchmark
+python script/formatters/discrimeval_formatter.py \
+  --input raw_data/discrimeval_gender.json \
+  --output data/discrimeval_gender.jsonl
+```
+
+### Required JSONL Format
+
+Each line must be a valid JSON object with these fields:
+
+```json
+{
+  "question_id": "042",
+  "text": "Question text here",
+  "type": "multi_choice",
+  "options": ["A: Option 1", "B: Option 2", "C: Cannot determine"]
+}
+```
+
+**Field specifications:**
+- `question_id` (string): Unique identifier within the benchmark
+- `text` (string): The question text
+- `type` (string): Question type (e.g., "multi_choice", "open_ended")
+- `options` (array, optional): List of answer choices for multi-choice questions
+
+### Adding New Benchmark Formatters
+
+To add a formatter for a new benchmark:
+
+1. Create `script/formatters/{benchmark_name}_formatter.py`
+2. Read the source benchmark format
+3. Convert to standardized JSONL with required fields
+4. Handle benchmark-specific quirks (IDs, text cleaning, etc.)
+5. Save to `data/{benchmark_name}.jsonl`
+
+Example structure:
+
+```python
+# script/formatters/new_benchmark_formatter.py
+import json
+import argparse
+
+def format_benchmark(input_path, output_path):
+    """Convert benchmark to JSONL format."""
+    with open(input_path, 'r') as f_in, open(output_path, 'w') as f_out:
+        for item in read_benchmark(f_in):
+            formatted = {
+                "question_id": item["id"],
+                "text": item["question"],
+                "type": "multi_choice",
+                "options": item["choices"]
+            }
+            f_out.write(json.dumps(formatted) + '\n')
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    format_benchmark(args.input, args.output)
+```
+
+---
+
+## Extending the Framework
 
 ### Adding New Routing Strategies
 
-Create a new router in `src/routing/`:
+Custom routing strategies control message visibility. The `vanilla` router shows all previous messages; custom routers can implement selective visibility.
+
+**Base router interface:**
+
+```python
+# src/routing/base_router.py
+class BaseRouter:
+    def get_visible_messages(self, current_agent, current_round, history):
+        """
+        Returns list of message IDs visible to current_agent.
+
+        Args:
+            current_agent: Agent object about to speak
+            current_round: Current round number (0-indexed)
+            history: List of all previous rounds with messages
+
+        Returns:
+            List of message_ids the agent should see
+        """
+        pass
+```
+
+**Example 1: Role-based visibility**
+
+Agents only see messages from agents with the same role:
 
 ```python
 # src/routing/role_based_router.py
 from src.routing.base_router import BaseRouter
 
 class RoleBasedRouter(BaseRouter):
-    """Route messages based on agent roles."""
+    """Agents see only messages from same-role agents."""
+
+    def get_visible_messages(self, current_agent, current_round, history):
+        if current_round == 0:
+            return []  # Round 0: no prior messages
+
+        # Show only messages from agents with same role
+        visible = []
+        for round_data in history[:current_round]:
+            same_role_msgs = [
+                msg["message_id"] for msg in round_data["messages"]
+                if msg["agent_role"] == current_agent.role
+            ]
+            visible.extend(same_role_msgs)
+        return visible
+```
+
+**Example 2: Last round only**
+
+Agents only see messages from the immediately previous round:
+
+```python
+# src/routing/last_round_router.py
+from src.routing.base_router import BaseRouter
+
+class LastRoundRouter(BaseRouter):
+    """Agents see only the previous round's messages."""
 
     def get_visible_messages(self, current_agent, current_round, history):
         if current_round == 0:
             return []
 
-        # Only show messages from same role
+        # Show only messages from previous round
         previous_round = history[current_round - 1]
-        same_role_msgs = [
-            msg["message_id"] for msg in previous_round["messages"]
-            if msg["role"] == current_agent.role
-        ]
-        return same_role_msgs
+        return [msg["message_id"] for msg in previous_round["messages"]]
 ```
 
-Then use in config:
+**Using custom routers:**
 
 ```yaml
-routing_strategy: role_based
+experiment:
+  routing_strategy: role_based  # or last_round, or your custom name
+  max_rounds: 3
 ```
 
 ### Adding New Model Families
 
-Add to `src/agents/model_factory.py`:
+Add to `src/agent/model_factory.py`:
 
 ```python
 def load_model(model_config: dict):
@@ -642,20 +978,6 @@ def load_model(model_config: dict):
     # ...
 ```
 
-### Custom Output Schemas
-
-Extend `src/conversation/schemas.py`:
-
-```python
-class DebateOutput(BaseModel):
-    """Extended output for debate-style conversations."""
-    narrative: str
-    final_answer: str
-    brief_summary: str
-    confidence: float = Field(ge=0, le=1)
-    evidence_cited: List[str] = []
-```
-
 ---
 
 ## Schema Versioning
@@ -664,16 +986,20 @@ class DebateOutput(BaseModel):
 
 All transcripts include a `protocol_version` field. When schemas evolve:
 
-1. Create new version directory: `schemas/YYYY-MM-DD/`
-2. Update `schemas/index.json`
+1. Create new version directory: `schema/YYYY-MM-DD/` (follows MCP convention - no v-prefix)
+2. Update `schema/index.json`
 3. Old transcripts remain parseable
+
+**Note on naming conventions:**
+- **Schema directories**: `schema/2025-11-03/` (no v-prefix, follows MCP repo convention)
+- **Experiment names and config files**: `experiment_name_vanilla_v2025-11-03` (with v-prefix to indicate protocol version, not modification date)
 
 ### Validating Transcripts
 
 ```bash
-python scripts/validate_transcript.py \
-  --transcript experiments/bbq_race/llama3_8b_3agent_race_2025-11-03/transcripts/{uuid}.json \
-  --schema schemas/2025-11-03/conversation.schema.json
+python script/validate_transcript.py \
+  --transcript experiment/bbq_race/llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03/transcript/{uuid}.json \
+  --schema schema/2025-11-03/conversation.schema.json
 ```
 
 ---
