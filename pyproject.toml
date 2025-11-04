@@ -1,5 +1,5 @@
 [project]
-name = "project-mac-fairness"
+name = "mac-fairness"
 version = "0.1.0"
 description = "Multi-agent conversation framework for fairness evaluation"
 readme = "README.md"

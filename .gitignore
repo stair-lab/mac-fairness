@@ -1,9 +1,6 @@
 # Project-specific: MAC Fairness
 # Experiment outputs (can be large, generated on servers)
 experiments/
-logs/
-conversations/data/*.json
-conversations/by_*/
 
 # Model caches (downloaded on servers)
 .cache/
