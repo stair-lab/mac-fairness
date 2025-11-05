@@ -82,7 +82,7 @@ python script/query_transcripts.py --benchmark bbq_race
 ├── data/                                   # Benchmark questions (separated according to subcategories)
 │   ├── bbq_race.jsonl
 │   ├── bbq_gender.jsonl
-│   └── discrimeval_gender.jsonl
+│   └── discrim_eval_gender.jsonl
 │
 ├── src/                                    # Source code
 │   ├── agent/                              # Agent implementations
@@ -110,7 +110,8 @@ python script/query_transcripts.py --benchmark bbq_race
     ├── validate_transcript.py              # Schema validator
     └── formatters/                         # Benchmark data formatters
         ├── bbq_formatter.py                # Format BBQ benchmark to JSONL
-        ├── discrimeval_formatter.py        # Format DiscrimEval benchmark to JSONL
+        ├── discrim_eval_formatter.py       # Format DiscrimEval benchmark to JSONL
+        |-- difference_awareness_formatter.py  # Format Difference Awareness benchmark to JSONL
         └── utils.py                        # Shared formatting utilities
 ```
 
@@ -268,6 +269,7 @@ experiment:
    - `models` - model loading configurations
 
 2. **Environment Variable** (Recommended):
+
    ```bash
    export PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT="/shared/experiments"
    # If not set, defaults to <workspace>/experiment
@@ -345,6 +347,7 @@ Components (Manual - you choose):
   - References schema directory `schema/2025-11-03/` (which follows MCP convention without 'v')
 
 **Automatic additions** by the framework:
+
 - **Config snapshots**: `{experiment_name}_{TIMESTAMP}.yaml` (e.g., `llama3_8b_3agent_as-human-demographics_vanilla_v2025-11-03_20251104T120000Z.yaml`)
   - Timestamp added automatically at submission/start time
   - Prevents overwrites when submitting same experiment multiple times
@@ -406,6 +409,7 @@ Round N: Continues until max_rounds reached
 ```
 
 **Key properties:**
+
 - **Within a round**: Agents speak sequentially in the order defined in the config
 - **Between rounds**: All agents see the same history (determined by routing strategy)
 - **No interruption**: An agent cannot interrupt another agent mid-round
@@ -415,10 +419,12 @@ Round N: Continues until max_rounds reached
 The default `vanilla` routing strategy implements full visibility:
 
 **Speaking order:**
+
 - Agents speak in the order listed in the config (speaker_001, speaker_002, speaker_003, ...)
 - Same order maintained across all rounds
 
 **Message visibility:**
+
 - **Round 0**: Agents see only the initial question (no prior agent messages)
 - **Round 1+**: Agents see **all messages** from **all previous rounds**
   - Example: In Round 2, agents see all messages from Rounds 0 and 1
@@ -450,6 +456,7 @@ All agents now see: Question + [M1, M2, M3, M4, M5, M6]
 You can implement custom routing strategies to control visibility differently:
 
 **Partial visibility examples:**
+
 - **Last round only**: Agents see only messages from the immediately previous round
 - **Role-based**: Agents see only messages from agents with the same role
 - **Selective**: Agents see only messages explicitly routed to them
@@ -482,6 +489,7 @@ models:
 ```
 
 **How it works:**
+
 - `models:` section defines model configurations (path, vLLM settings)
 - `shared_model_backbone:` specifies which model definition to load (once)
 - `agents[].model: shared` tells agents to use the shared backbone
@@ -549,6 +557,7 @@ python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demogr
 ### Execution Flow
 
 **For local execution** (default):
+
 1. Load and save config snapshot to `bookkeeping/config_snapshot/{benchmark}/{experiment_name}_{TIMESTAMP}.yaml`
 2. Load the snapshot (not scratch file) for execution
 3. Read questions from the specified JSONL file
@@ -558,6 +567,7 @@ python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demogr
 7. Update `bookkeeping/index.json` with metadata for each transcript (includes snapshot timestamp)
 
 **For Slurm submission** (`--mode slurm`):
+
 1. **Save config snapshot immediately** with timestamp (at queuing time, before job starts)
 2. Generate Slurm job script that uses the timestamped snapshot
 3. Submit job to Slurm queue
@@ -565,6 +575,7 @@ python script/run_experiment.py config/bbq_race/llama3_8b_3agent_as-human-demogr
 5. When job runs, it uses the snapshot (steps 2-7 above)
 
 **Key advantage**: Config snapshot is saved at submission time for Slurm jobs, allowing you to:
+
 - Queue multiple jobs with the same config file name
 - Edit the scratch file immediately after submission
 - Ensure each job uses exactly the config it was submitted with
@@ -629,6 +640,7 @@ python script/run_experiment.py \
 ```
 
 The script automatically:
+
 - Saves config snapshot once with timestamp before submitting the array
 - Distributes questions across array tasks
 - Each task saves its transcripts independently
@@ -733,6 +745,7 @@ python script/query_transcripts.py \
 The single index file (`bookkeeping/index.json`) contains all metadata:
 
 **Key fields:**
+
 - `submission_timestamp`: When the job was submitted (saved in config snapshot filename)
 - `execution_timestamp`: When the conversation actually ran
 - `protocol_version`: Schema version (e.g., "2025-11-03")
@@ -820,9 +833,9 @@ python script/formatters/bbq_formatter.py \
   --output data/bbq_race.jsonl
 
 # Format DiscrimEval benchmark
-python script/formatters/discrimeval_formatter.py \
-  --input raw_data/discrimeval_gender.json \
-  --output data/discrimeval_gender.jsonl
+python script/formatters/discrim_eval_formatter.py \
+  --input raw_data/discrim_eval_gender.json \
+  --output data/discrim_eval_gender.jsonl
 ```
 
 ### Required JSONL Format
@@ -839,6 +852,7 @@ Each line must be a valid JSON object with these fields:
 ```
 
 **Field specifications:**
+
 - `question_id` (string): Unique identifier within the benchmark
 - `text` (string): The question text
 - `type` (string): Question type (e.g., "multi_choice", "open_ended")
@@ -991,6 +1005,7 @@ All transcripts include a `protocol_version` field. When schemas evolve:
 3. Old transcripts remain parseable
 
 **Note on naming conventions:**
+
 - **Schema directories**: `schema/2025-11-03/` (no v-prefix, follows MCP repo convention)
 - **Experiment names and config files**: `experiment_name_vanilla_v2025-11-03` (with v-prefix to indicate protocol version, not modification date)
 

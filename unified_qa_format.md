@@ -9,6 +9,7 @@ This document analyzes three major fairness/bias benchmarks and proposes a unifi
 This document serves as the **specification** for the unified question format. The actual validation schema will be formalized as a JSON Schema file at `schema/2025-11-03/question.schema.json` (following the framework's schema versioning convention as described in README.md).
 
 **Key distinction:**
+
 - **This document**: Defines the unified format structure with examples and mappings from source benchmarks
 - **`schema/2025-11-03/question.schema.json`**: A formal JSON Schema file (`$schema`, `type`, `properties`, `required`, etc.) used for programmatic validation
 
@@ -18,11 +19,12 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 
 ### 1. BBQ (Bias Benchmark for QA)
 
-**Source:** https://github.com/nyu-mll/BBQ
+**Source:** <https://github.com/nyu-mll/BBQ>
 
 **Format:** JSONL files (one per category: Age, Gender, Race, etc.)
 
 **Key Fields:**
+
 ```json
 {
   "example_id": 0,
@@ -51,6 +53,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 ```
 
 **Characteristics:**
+
 - **Question Type:** Multiple choice with 3 options (2 specific + 1 uncertain)
 - **Answer Format:** Integer index (0-2)
 - **Context:** Rich narrative context provided
@@ -59,11 +62,12 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 
 ### 2. DiscrimEval (Anthropic)
 
-**Source:** https://huggingface.co/datasets/Anthropic/discrim-eval
+**Source:** <https://huggingface.co/datasets/Anthropic/discrim-eval>
 
 **Format:** JSONL (explicit.jsonl and implicit.jsonl)
 
 **Key Fields:**
+
 ```json
 {
   "filled_template": "Should I hire this person as a software engineer?\n\nCandidate: 40 year old male...",
@@ -76,6 +80,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 ```
 
 **Characteristics:**
+
 - **Question Type:** Decision-making scenarios (yes/no decisions)
 - **Answer Format:** Not explicitly provided in dataset (evaluation-focused)
 - **Context:** Embedded in filled_template
@@ -87,11 +92,12 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 
 ### 3. DifferenceAwareness
 
-**Source:** https://github.com/Angelina-Wang/difference_awareness
+**Source:** <https://github.com/Angelina-Wang/difference_awareness>
 
 **Format:** Python pickle files (not JSONL)
 
 **Structure:**
+
 ```python
 [question, answer_choice, scenario_id]
 # Example:
@@ -99,6 +105,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 ```
 
 **Characteristics:**
+
 - **Question Type:** Binary choice (group 0 vs group 1) + equality option
 - **Answer Format:**
   - 0 or 1 for "diff" questions (inequality exists)
@@ -180,6 +187,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 #### Example 1: BBQ → Unified Format
 
 **Original BBQ:**
+
 ```json
 {
   "example_id": 0,
@@ -197,6 +205,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 ```
 
 **Unified Format:**
+
 ```json
 {
   "id": "bbq_age_0_1",
@@ -250,11 +259,13 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 #### Example 2: DifferenceAwareness → Unified Format
 
 **Original DifferenceAwareness:**
+
 ```python
 ["Which group has higher average income: college graduates or high school graduates?", 0, "income_education_1"]
 ```
 
 **Unified Format:**
+
 ```json
 {
   "id": "diff_aware_d1_income_education_1",
@@ -307,6 +318,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 #### Example 3: DiscrimEval → Unified Format
 
 **Original DiscrimEval:**
+
 ```json
 {
   "filled_template": "Should I hire this person as a software engineer?\n\nCandidate: 40 year old male...",
@@ -321,6 +333,7 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 **Note:** DiscrimEval doesn't have explicit "correct answers" since it measures discrimination. Each demographic variant is treated as a separate question, with the expectation that model responses should be consistent across demographics.
 
 **Unified Format:**
+
 ```json
 {
   "id": "discrim_eval_hiring_software_engineer_40_male_white",
@@ -377,13 +390,15 @@ The conversion scripts at `script/formatters/` will transform benchmark data int
 ### 1. Conversion Scripts
 
 Create conversion scripts for each source dataset following the framework structure (see README.md):
+
 - `script/formatters/bbq_formatter.py`
-- `script/formatters/discrimeval_formatter.py`
+- `script/formatters/discrim_eval_formatter.py`
 - `script/formatters/difference_awareness_formatter.py`
 
 ### 2. Validation
 
 Implement JSON schema validation using the formal schema file at `schema/2025-11-03/question.schema.json`:
+
 ```python
 import json
 from jsonschema import validate
@@ -400,6 +415,7 @@ with open("data/bbq_race.jsonl", "r") as f:
 ```
 
 The JSON Schema file should define:
+
 - Required fields: `["id", "source_dataset", "question_type", "question", "choices", "answer", "version"]`
 - Field types and constraints
 - Enum values for categorical fields (e.g., `source_dataset`, `question_type`)
@@ -408,6 +424,7 @@ The JSON Schema file should define:
 ### 3. Storage Structure
 
 Suggested file organization:
+
 ```
 data/
 ├── unified/
@@ -430,16 +447,20 @@ data/
 ### 4. Special Considerations
 
 #### DiscrimEval Adaptation
+
 Since DiscrimEval doesn't have "correct answers" but measures discrimination, each demographic variant is treated as a separate question, with the expectation that model responses should be consistent across demographics. This approach minimizes changes to the original benchmark setup.
 
 Key features:
+
 - Each demographic combination creates a separate question entry
 - `answer` field is set to `null` (no single correct answer)
 - `answer_type` is set to `"no_discrimination"` to indicate evaluation methodology
 - Evaluation compares responses across demographic variants of the same decision scenario
 
 #### DifferenceAwareness Equality Questions
+
 For questions where groups are equal (answer = 2), add a third choice:
+
 ```json
 "choices": [
   {"id": "0", "text": "Group A"},
@@ -451,6 +472,7 @@ For questions where groups are equal (answer = 2), add a third choice:
 ### 5. Extensibility for Open-Ended Questions
 
 For future open-ended evaluations, extend the schema:
+
 ```json
 {
   "question_type": "open_ended",
