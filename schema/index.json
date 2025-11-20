@@ -1,0 +1,43 @@
+{
+  "schema_registry": {
+    "current_version": "2025-11-27",
+    "versions": [
+      {
+        "version": "2025-11-27",
+        "release_date": "2025-11-27",
+        "description": "Initial protocol version with unified question format and multi-agent conversation schemas",
+        "schemas": {
+          "question": "2025-11-27/question.schema.json",
+          "agent": "2025-11-27/agent.schema.json",
+          "message": "2025-11-27/message.schema.json",
+          "routing": "2025-11-27/routing.schema.json",
+          "structured_output": "2025-11-27/structured_output.schema.json",
+          "metadata": "2025-11-27/metadata.schema.json",
+          "conversation": "2025-11-27/conversation.schema.json"
+        },
+        "breaking_changes": [],
+        "notes": [
+          "Unified question format supporting BBQ, DiscrimEval, and DifferenceAwareness benchmarks",
+          "Flexible agent configuration with role, persona, demographics, and as_human attributes",
+          "Round-based conversation structure with configurable routing strategies",
+          "Comprehensive metadata tracking for reproducibility",
+          "Zod schemas as single source of truth (schemas.ts)",
+          "JSON schemas generated from Zod definitions",
+          "TypeScript types automatically derived from Zod"
+        ],
+        "implementation": {
+          "source": "2025-11-27/schemas.ts",
+          "generator": "2025-11-27/generate-json-schemas.ts",
+          "validator": "2025-11-27/validate.ts",
+          "test": "2025-11-27/test-validation.ts"
+        }
+      }
+    ]
+  },
+  "documentation": {
+    "overview": "This registry tracks all protocol versions for the multi-agent conversation fairness evaluation framework",
+    "naming_convention": "Schema directories follow MCP convention (YYYY-MM-DD)",
+    "versioning_policy": "New versions are created when schemas have breaking changes or significant additions",
+    "backward_compatibility": "Older transcripts remain valid and parseable with their specified protocol_version"
+  }
+}

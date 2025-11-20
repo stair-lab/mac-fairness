@@ -1,15 +1,13 @@
 [project]
 name = "mac-fairness"
-version = "0.1.0"
-description = "Multi-agent conversation framework for fairness evaluation"
+version = "2025.11.27"
+description = "Multi-agent conversation framework for fairness evaluation (Schema Version: 2025-11-27)"
 readme = "README.md"
 requires-python = ">=3.10"
 
 dependencies = [
     "vllm>=0.11.0",
-    "pydantic>=2.10.0",
     "pyyaml>=6.0",
-    "jsonschema>=4.24.0",
 ]
 
 [build-system]
@@ -17,5 +15,7 @@ requires = ["setuptools>=80.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["project_mac_fairness"]
 package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

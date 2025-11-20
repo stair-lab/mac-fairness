@@ -1,6 +1,7 @@
 # Project-specific: MAC Fairness
-# Experiment outputs (can be large, generated on servers)
-experiments/
+# Experiment outputs
+bookkeeping/
+experiment/
 
 # Model caches (downloaded on servers)
 .cache/
@@ -9,13 +10,23 @@ experiments/
 *.safetensors
 
 # Temp and test items
-*.csv
 *adhoc*
 *.DS*
+archive/
+slurm_logs/
 
-# Claude Code
-.claude/
-CLAUDE.md
+# Raw benchmark data
+raw_data/
+
+# Node.js / TypeScript
+node_modules/
+# schema/*.schema.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+package-lock.json
+yarn.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

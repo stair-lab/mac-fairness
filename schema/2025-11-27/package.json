@@ -1,0 +1,28 @@
+{
+  "name": "mac-fairness-schemas",
+  "private": true,
+  "description": "Schema definitions for MAC Fairness Framework - Schema Version 2025-11-27",
+  "type": "module",
+  "main": "dist/schemas.js",
+  "types": "dist/schemas.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "generate": "tsx generate-json-schemas.ts",
+    "validate": "tsx validate.ts",
+    "regenerate": "npm run build && npm run generate",
+    "test": "tsx test-validation.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "zod": "^3.22.4",
+    "zod-to-json-schema": "^3.22.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
