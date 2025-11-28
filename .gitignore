@@ -15,8 +15,12 @@ experiment/
 archive/
 slurm_logs/
 
-# Raw benchmark data
+# Benchmark data
 raw_data/
+data/*
+!data/dev_ollama/
+data/dev_ollama/*
+!data/dev_ollama/bbq_race_sample_0-9.jsonl
 
 # Node.js / TypeScript
 node_modules/
@@ -37,6 +41,7 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+uv.lock
 .Python
 build/
 develop-eggs/

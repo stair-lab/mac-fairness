@@ -81,17 +81,18 @@ def format_bbq_to_unified(input_path, output_path, subcategory="race"):
 
             # Build the minimal unified format
             formatted = {
-                # Unified ID: benchmark_subcategory_originalid (lowercase)
-                "id": f"bbq_{subcategory}_{item.get('example_id', idx):03d}",
+                # Unified question_id: benchmark_subcategory_originalid
+                "question_id": f"bbq_{subcategory}_{item.get('example_id', idx)}",
                 "source_dataset": "BBQ",
                 "source_id": str(item.get("example_id", idx)),
                 "question_type": "multiple_choice",
-                "context": item.get("context", ""),  # optional
+                "context": item.get("context", ""),
                 "question": item["question"],
                 "choices": unified_choices,  # Always A/B/C format
                 "correct_answer_id": correct_answer_id,  # Always A/B/C format
                 # Preserve ALL original BBQ metadata
                 "source_metadata": {
+                    "example_id": item.get("example_id"),
                     "question_index": item.get("question_index"),
                     "question_polarity": item.get("question_polarity"),
                     "context_condition": item.get("context_condition"),
@@ -109,3 +110,22 @@ def format_bbq_to_unified(input_path, output_path, subcategory="race"):
             }
 
             f_out.write(json.dumps(formatted) + "\n")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Convert BBQ benchmark to unified JSONL format"
+    )
+    parser.add_argument("--input", required=True, help="Path to input BBQ JSONL file")
+    parser.add_argument(
+        "--output", required=True, help="Path to output unified JSONL file"
+    )
+    parser.add_argument(
+        "--subcategory",
+        default="race",
+        help="BBQ subcategory (e.g., race, gender, age) for question IDs",
+    )
+
+    args = parser.parse_args()
+    format_bbq_to_unified(args.input, args.output, args.subcategory)
+    print(f"✓ Formatted BBQ data saved to {args.output}")

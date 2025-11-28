@@ -1,7 +1,45 @@
 /**
- * Test script for Zod validation
+ * Zod Validation Test Suite - Version 2025-11-27
  *
- * Tests various scenarios to ensure validation works correctly
+ * PURPOSE:
+ * Comprehensive test suite for all Zod schemas to ensure validation works correctly.
+ * Tests both valid and invalid data cases to verify schema constraints.
+ *
+ * WHEN TO RUN:
+ * Run this test suite after any schema changes to verify correctness:
+ *   npm run test
+ *
+ * TEST COVERAGE:
+ * 1. StructuredOutputSchema - Tests all response types (participant, judge, moderator, devils_advocate)
+ * 2. AgentSchema - Tests agent configuration validation
+ * 3. MessageSchema - Tests message structure with metadata
+ * 4. IdentityRevealSettingsSchema - Tests boolean validation for reveal settings
+ * 5. RoutingSchema - Tests routing configuration validation
+ * 6. QuestionSchema - Tests question format with capital letter validation
+ * 7. Discriminated Union - Tests type-specific field requirements
+ * 8. TypeScript Type Inference - Verifies TypeScript types work correctly
+ * 9. validate.ts function - Tests the validation CLI interface
+ *
+ * VALIDATION PIPELINE:
+ * schemas.ts (Zod definitions) → test-validation.ts (this file, tests)
+ *                                     ↓
+ *                                validate.ts (runtime validation CLI)
+ *                                     ↓
+ *                                Python code (subprocess calls)
+ *
+ * ADDING NEW TESTS:
+ * When adding new schema fields or validation rules:
+ * 1. Add test cases to the testCases object
+ * 2. Add validation checks to the test sections
+ * 3. Document expected behavior in test output
+ * 4. Run `npm run test` to verify all tests pass
+ *
+ * TEST OUTPUT:
+ * The script prints detailed test results showing:
+ * - Which validations passed (✓)
+ * - Which validations failed as expected (✗)
+ * - Error messages and paths for failed validations
+ * - Summary of field requirements for discriminated unions
  */
 
 import { schemas } from './schemas.js';
@@ -39,7 +77,7 @@ const testCases = {
   agentValid: {
     agent_id: "spkr_001",  // Must match regex /^spkr_\d{3}$/
     role: "participant",
-    as_human: true,
+    if_as_human: true,
     model: "shared",
     temperature: 0.7,
     max_tokens: 1000,
@@ -53,7 +91,7 @@ const testCases = {
     agent_id: "spkr_001",  // Must match regex /^spkr_\d{3}$/
     agent_role: "participant",
     agent_identity_display: "a black doctor",  // Optional: how agent appears in conversation
-    round_number: 1,
+    round_id: 1,
     structured_response: {
       response_type: "participant",
       opinion: "A",
@@ -74,14 +112,14 @@ const testCases = {
   identityRevealValid: {
     reveal_persona: true,
     reveal_demographics: false,
-    reveal_as_human: true
+    reveal_presence_mode: true
   },
 
   // Invalid identity reveal settings (non-boolean value)
   identityRevealInvalid: {
     reveal_persona: "yes",  // Should be boolean
     reveal_demographics: false,
-    reveal_as_human: true
+    reveal_presence_mode: true
   },
 
   // Valid routing config

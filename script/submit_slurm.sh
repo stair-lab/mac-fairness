@@ -122,7 +122,7 @@ cat >> "$SLURM_SCRIPT" << EOF
 source .venv/bin/activate
 
 # Set experiments root if needed
-export PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT=\${PROJECT_MAC_FAIRNESS_EXPERIMENTS_ROOT:-./experiment}
+export MAC_FAIRNESS_EXPERIMENT_ROOT=\${MAC_FAIRNESS_EXPERIMENT_ROOT:-./experiment}
 
 # Run experiment using the snapshot (not the scratch config)
 EOF

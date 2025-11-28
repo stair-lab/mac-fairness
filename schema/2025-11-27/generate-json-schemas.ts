@@ -1,8 +1,40 @@
 /**
- * JSON Schema Generator
+ * JSON Schema Generator - Version 2025-11-27
  *
- * Generates JSON Schema files from Zod definitions
- * Ensures exact compatibility with existing schemas
+ * PURPOSE:
+ * Generates JSON Schema (.schema.json) files from Zod schema definitions.
+ * These JSON schemas are OPTIONAL and primarily for documentation purposes.
+ * The framework uses Zod schemas directly for runtime validation via validate.ts.
+ *
+ * WHEN TO RUN:
+ * Run this script after updating schemas.ts to regenerate JSON Schema documentation:
+ *   npm run generate
+ *
+ * OUTPUT FILES:
+ * All generated files are written to schema/2025-11-27/:
+ * - question.schema.json - Question format schema
+ * - agent.schema.json - Agent configuration schema
+ * - structured_output.schema.json - Discriminated union for agent responses
+ * - message.schema.json - Message structure schema
+ * - routing.schema.json - Routing configuration schema
+ * - conversation.schema.json - Full transcript schema
+ * - metadata.schema.json - Index entry schema
+ *
+ * VALIDATION PIPELINE:
+ * schemas.ts (Zod) → [generate-json-schemas.ts] → *.schema.json (optional docs)
+ *                              ↓
+ *                     validate.ts (runtime validation used by Python)
+ *
+ * TECHNICAL DETAILS:
+ * - Uses zod-to-json-schema library for conversion
+ * - Preserves exact field descriptions and validation rules
+ * - Handles discriminated unions correctly (for StructuredOutputSchema)
+ * - Sets additionalProperties: false for strict validation
+ * - Inlines all definitions ($refStrategy: 'none') for standalone schemas
+ *
+ * NOTE:
+ * JSON schemas are auto-generated and should NOT be manually edited.
+ * Always modify schemas.ts and regenerate using this script.
  */
 
 import fs from 'fs';
@@ -31,7 +63,7 @@ const schemaConfigs = [
     fileName: 'agent.schema.json',
     title: 'Agent Configuration',
     description: 'Configuration for a single agent in the multi-agent conversation',
-    required: ['agent_id', 'role', 'as_human', 'model', 'temperature', 'max_tokens']
+    required: ['agent_id', 'role', 'if_as_human', 'model', 'temperature', 'max_tokens']
   },
   {
     zodSchema: schemas.structuredOutput,
@@ -45,7 +77,7 @@ const schemaConfigs = [
     fileName: 'message.schema.json',
     title: 'Conversation Message',
     description: 'Structure for a single message in a multi-agent conversation',
-    required: ['message_id', 'agent_id', 'agent_role', 'round_number', 'structured_response', 'visible_to', 'message_metadata']
+    required: ['message_id', 'agent_id', 'agent_role', 'round_id', 'structured_response', 'visible_to', 'message_metadata']
   },
   {
     zodSchema: schemas.routing,
@@ -66,7 +98,7 @@ const schemaConfigs = [
     fileName: 'metadata.schema.json',
     title: 'Transcript Metadata',
     description: 'Metadata for a conversation transcript (used in index)',
-    required: ['transcript_id', 'experiment_name', 'benchmark_subcategory', 'question_id', 'job_task_id', 'agent_config_axes', 'submission_timestamp', 'execution_timestamp', 'transcript_path', 'config_snapshot_path', 'protocol_version', 'routing_strategy', 'identity_reveal_settings', 'n_agents', 'agents', 'status', 'consensus_reached', 'total_rounds_completed', 'retry_attempts']
+    required: ['transcript_id', 'experiment_name', 'benchmark_subcategory', 'question_id', 'job_task_id', 'submission_timestamp', 'execution_timestamp', 'transcript_path', 'config_snapshot_path', 'protocol_version', 'routing_strategy', 'identity_reveal_config', 'n_agents', 'agents', 'status', 'consensus_reached', 'total_rounds_completed', 'retry_attempts']
   },
 ];
 
