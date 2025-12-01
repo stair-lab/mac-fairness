@@ -7,15 +7,12 @@
   "types": "dist/schemas.d.ts",
   "scripts": {
     "build": "tsc",
-    "generate": "tsx generate-json-schemas.ts",
     "validate": "tsx validate.ts",
-    "regenerate": "npm run build && npm run generate",
     "test": "tsx test-validation.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "zod": "^3.22.4",
-    "zod-to-json-schema": "^3.22.5"
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

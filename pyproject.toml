@@ -3,13 +3,12 @@ name = "mac-fairness"
 version = "2025.11.27"
 description = "Multi-agent conversation framework for fairness evaluation (Schema Version: 2025-11-27)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 dependencies = [
-    "vllm>=0.11.0",
-    "pyyaml>=6.0",
-    # Note: Ollama should be installed separately from ollama.ai
-    # The OllamaAgent uses subprocess to call the ollama CLI
+    "vllm>=0.11.2",
+    "pyyaml>=6.0.3",
+    "huggingface-hub[mcp]>=0.36.0",
 ]
 
 [build-system]

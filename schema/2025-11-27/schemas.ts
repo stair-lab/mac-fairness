@@ -33,9 +33,8 @@
  * When adding new fields or validation rules:
  * 1. Update the Zod schema in this file
  * 2. Run `npm run build` to compile TypeScript
- * 3. Run `npm run generate` to regenerate JSON schemas (optional)
- * 4. Run `npm run test` to verify all test cases pass
- * 5. Update test-validation.ts with new test cases
+ * 3. Run `npm run test` to verify all test cases pass
+ * 4. Update test-validation.ts with new test cases
  *
  * SCHEMA VERSIONING:
  * This version (2025-11-27) follows the YYYY-MM-DD convention from Model Context Protocol (MCP).
