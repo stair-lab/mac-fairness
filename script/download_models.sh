@@ -10,8 +10,12 @@
 set -euo pipefail
 
 # Configuration
-MODELS_DIR="${HF_HUB_CACHE}"
-LOG_FILE="${LFS_HOME}/.log/hf_model_download_$(date +%Y%m%d_%H%M%S).log"
+MODELS_DIR="$HF_HUB_CACHE"
+LOG_DIR="$LFS_HOME/.log"
+LOG_FILE="$LOG_DIR/hf_model_download_$(date +%Y%m%d_%H%M%S).log"
+
+# Create log directory if it doesn't exist
+mkdir -p "$LOG_DIR"
 
 # Check HF_TOKEN
 if [ -z "${HF_TOKEN:-}" ]; then

@@ -86,30 +86,30 @@ cd ../..
 # Ensure HF_TOKEN is set
 echo $HF_TOKEN
 
-# Run download script (downloads 11 models, ~85 GB)
+# Run download script (downloads 11 models, ~101 GB)
 ./script/download_models.sh
 ```
 
-### Tiny/Small/Medium (all <10B params): 11 models, ~85 GB
+### Tiny/Small/Medium (all <10B params): 11 models, ~101 GB
 
-- [google/gemma-3-1b-it](https://huggingface.co/google/gemma-3-1b-it) (~2 GB)
-- [meta-llama/Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct) (~3 GB)
-- [Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) (~3 GB)
-- [meta-llama/Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct) (~7 GB)
-- [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct) (~7 GB)
-- [google/gemma-3-4b-it](https://huggingface.co/google/gemma-3-4b-it) (~9 GB)
-- [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) (~9 GB)
-- [microsoft/Phi-3-mini-4k-instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) (~8 GB)
-- [microsoft/Phi-3.5-mini-instruct](https://huggingface.co/microsoft/Phi-3.5-mini-instruct) (~8 GB)
-- [microsoft/Phi-4-mini-instruct](https://huggingface.co/microsoft/Phi-4-mini-instruct) (~8 GB)
-- [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) (~17 GB)
+- [Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) (3.1 GB)
+- [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct) (6.2 GB)
+- [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) (8.1 GB)
+- [google/gemma-3-1b-it](https://huggingface.co/google/gemma-3-1b-it) (2.0 GB)
+- [google/gemma-3-4b-it](https://huggingface.co/google/gemma-3-4b-it) (8.6 GB)
+- [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) (32.1 GB)
+- [meta-llama/Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct) (5.0 GB)
+- [meta-llama/Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct) (12.9 GB)
+- [microsoft/Phi-3-mini-4k-instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) (7.6 GB)
+- [microsoft/Phi-3.5-mini-instruct](https://huggingface.co/microsoft/Phi-3.5-mini-instruct) (7.6 GB)
+- [microsoft/Phi-4-mini-instruct](https://huggingface.co/microsoft/Phi-4-mini-instruct) (7.7 GB)
 
 **Important Notes:**
 
 - **Llama models:** Accept license before downloading
 - **Sampling params:** Use common defaults (see Model Configurations below)
 - **vLLM support:** Verify at https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/models
-- **Disk space:** ~85 GB required
+- **Disk space:** ~101 GB required
 
 ---
 
@@ -123,7 +123,8 @@ nvidia-smi
 du -sh $HF_HOME/hub/
 
 # List models
-ls $HF_HOME/hub/ | grep models--
+source .venv/bin/activate
+hf cache scan [--verbose]
 
 # Test imports
 python << 'EOF'
@@ -171,11 +172,6 @@ vllm_config:
 
 | GPU Model       | VRAM  | gpu_memory_util | max_num_seqs | max_model_len | Notes                                      |
 | --------------- | ----- | --------------- | ------------ | ------------- | ------------------------------------------ |
-| RTX 2080 Ti     | 11GB  | 0.75            | 2            | 2048          | Very tight, prefer smaller models (≤3B)    |
-| RTX A4000       | 16GB  | 0.8             | 2-4          | 4096          | OK for 8B, better for ≤4B models           |
-| P100 PCIe       | 16GB  | 0.8             | 2-4          | 4096          | Similar to A4000                           |
-| V100 SXM2       | 16GB  | 0.8             | 2-4          | 4096          | Faster than P100, same memory              |
-| P40             | 24GB  | 0.85            | 4-6          | 4096          | Good for 8B models                         |
 | V100 PCIe/SXM2  | 32GB  | 0.85            | 8-12         | 8192          | Comfortable for 8B                         |
 | L40S            | 48GB  | 0.9             | 12-16        | 8192          | Excellent for 8B, can handle some batching |
 | Quadro RTX 8000 | 48GB  | 0.9             | 12-16        | 8192          | Same tier as L40S                          |
@@ -183,6 +179,8 @@ vllm_config:
 | A100 80GB       | 80GB  | 0.9             | 16-32        | 8192          | Production-grade performance               |
 | H200            | 144GB | 0.9             | 32-64        | 8192          | Massive batching capability                |
 | B200            | 192GB | 0.9             | 64-128       | 8192          | Extreme batching, overkill for 8B          |
+
+> **Omitted:** RTX 2080 Ti (11GB), RTX A4000 (16GB), P100 PCIe (16 GB), V100 SXM2 (16GB), P40 (24GB)
 
 **Model size recommendations by GPU:**
 
