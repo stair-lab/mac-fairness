@@ -132,9 +132,9 @@ $MAC_FAIRNESS_WORKSPACE/
 │   └── dev_ollama/                         # Dev configurations (Ollama, no GPU required)
 │
 ├── data/                                   # Benchmark questions in unified format
-│   ├── bbq/                                # BBQ benchmark family
-│   ├── diff_aware/                         # DifferenceAwareness benchmark suite
-│   ├── discrim_eval/                       # DiscrimEval benchmark family
+│   ├── BBQ/                                # BBQ benchmark family
+│   ├── DifferenceAwareness/                # DifferenceAwareness benchmark suite
+│   ├── DiscrimEval/                        # DiscrimEval benchmark family
 │   └── dev_ollama/                         # Dev testing data (no GPU required)
 │
 ├── src/                                    # Source code
@@ -166,7 +166,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │   ├── run_experiment.py                   # Run full experiment (all questions)
 │   ├── submit_slurm.sh                     # Submit to Slurm (creates config snapshot)
 │   ├── query_index.py                      # Query index
-│   └── formatter/                         # Benchmark data formatter
+│   └── formatter/                          # Benchmark data formatter
 │       ├── bbq_formatter.py
 │       ├── diff_aware_formatter.py
 │       └── discrim_eval_formatter.py
@@ -230,7 +230,7 @@ experiment_metadata:
   experiment_name: llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27
   benchmark_subcategory: bbq_race
   schema_version: "2025-11-27"
-  questions_file: data/bbq/bbq_race.jsonl
+  questions_file: data/BBQ/bbq_race.jsonl
 
 # Conversation orchestration settings
 conversation_config:
@@ -344,12 +344,12 @@ The framework requires questions in a unified JSONL format that conforms to the 
 # Format BBQ benchmark
 python script/formatter/bbq_formatter.py \
   --input ./raw_data/BBQ/data/Race_ethnicity.jsonl \
-  --output ./data/bbq/bbq_race.jsonl
+  --output ./data/BBQ/bbq_race.jsonl
 
 # Format DiscrimEval benchmark
 python script/formatter/discrim_eval_formatter.py \
   --input ./raw_data/discrim-eval/explicit.jsonl \
-  --output ./data/discrim_eval/discrim_eval_gender.jsonl
+  --output ./data/DiscrimEval/discrim_eval_gender.jsonl
 ```
 
 **Unified question format:**
