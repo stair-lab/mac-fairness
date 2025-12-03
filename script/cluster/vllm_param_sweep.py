@@ -37,6 +37,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from itertools import product
 from pathlib import Path
@@ -230,57 +231,43 @@ def create_sweep_config(
     return config
 
 
-def get_snapshot_dir(benchmark: str) -> Path:
-    """Get the config snapshot directory for a benchmark.
-
-    Args:
-        benchmark: Benchmark subcategory (e.g., dev_snap)
-
-    Returns:
-        Path to snapshot directory
-    """
-    snapshot_dir = project_root / "bookkeeping" / "config_snapshot" / benchmark
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    return snapshot_dir
-
-
 def run_experiment(
     config: Dict[str, Any],
     questions: int,
-    snapshot_dir: Path,
 ) -> Tuple[bool, Optional[str]]:
     """Run experiment with given config.
 
     Args:
         config: Configuration dictionary
         questions: Number of questions to run
-        snapshot_dir: Directory to save config snapshot
 
     Returns:
         Tuple of (success, experiment_name)
     """
     exp_name = config["experiment_metadata"]["experiment_name"]
 
-    # Save config snapshot (persistent, not temporary)
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%SZ")
-    snapshot_path = snapshot_dir / f"{exp_name}_{timestamp}.yaml"
-    with open(snapshot_path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
-
-    # Build command
-    run_script = project_root / "script" / "run_experiment.py"
-    cmd = [
-        sys.executable,
-        str(run_script),
-        str(snapshot_path),
-        "--range",
-        f"0-{questions}",
-    ]
-
-    _info_print(f"Running: {exp_name} ({questions} questions)")
-    _debug_print(f"Command: {' '.join(cmd)}")
+    # Use a temp file for the config - run_experiment.py will create the
+    # authoritative snapshot via orchestrator.save_config_snapshot()
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as tmp_file:
+        yaml.dump(config, tmp_file, default_flow_style=False)
+        tmp_path = tmp_file.name
 
     try:
+        # Build command
+        run_script = project_root / "script" / "run_experiment.py"
+        cmd = [
+            sys.executable,
+            str(run_script),
+            tmp_path,
+            "--range",
+            f"0-{questions}",
+        ]
+
+        _info_print(f"Running: {exp_name} ({questions} questions)")
+        _debug_print(f"Command: {' '.join(cmd)}")
+
         result = subprocess.run(
             cmd,
             cwd=project_root,
@@ -299,6 +286,12 @@ def run_experiment(
     except Exception as e:
         _info_print(f"Error: {exp_name} - {e}")
         return False, exp_name
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def find_job_summary(exp_name: str, benchmark: str) -> Optional[Dict[str, Any]]:
@@ -616,12 +609,6 @@ def main():
     config_path = Path(args.config)
     base_config = load_base_config(config_path)
 
-    # Get benchmark for snapshot directory
-    benchmark = base_config.get("experiment_metadata", {}).get(
-        "benchmark_subcategory", args.benchmark
-    )
-    snapshot_dir = get_snapshot_dir(benchmark)
-
     # Handle quick test
     if args.quick_test:
         _info_print("\n" + "=" * 60)
@@ -631,7 +618,6 @@ def main():
         success, exp_name = run_experiment(
             base_config,
             questions=10,
-            snapshot_dir=snapshot_dir,
         )
 
         if success:
@@ -718,7 +704,6 @@ def main():
         success, exp_name = run_experiment(
             config,
             args.questions,
-            snapshot_dir,
         )
 
         if success:
