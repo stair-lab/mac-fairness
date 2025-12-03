@@ -152,8 +152,11 @@ class ConversationOrchestrator:
                 )
 
                 match_details = match_result.get("match_details", [])
+                # Defensive check: ensure both values are not None before comparison
                 if (
                     match_details
+                    and match_details[0].get("match_score") is not None
+                    and answer_match_threshold is not None
                     and match_details[0]["match_score"] >= answer_match_threshold
                 ):
                     # Match found - use letter code as opinion
@@ -248,12 +251,12 @@ class ConversationOrchestrator:
                         error.details["cumulative_time_ms"] = round(
                             cumulative_time_ms, 3
                         )
-                        error.details[
-                            "cumulative_tokens_generated"
-                        ] = cumulative_tokens_generated
-                        error.details[
-                            "cumulative_tokens_prompt"
-                        ] = cumulative_tokens_prompt
+                        error.details["cumulative_tokens_generated"] = (
+                            cumulative_tokens_generated
+                        )
+                        error.details["cumulative_tokens_prompt"] = (
+                            cumulative_tokens_prompt
+                        )
                         raise error
 
                 # Extract structured output
@@ -331,12 +334,12 @@ class ConversationOrchestrator:
                         error.details["cumulative_time_ms"] = round(
                             cumulative_time_ms, 3
                         )
-                        error.details[
-                            "cumulative_tokens_generated"
-                        ] = cumulative_tokens_generated
-                        error.details[
-                            "cumulative_tokens_prompt"
-                        ] = cumulative_tokens_prompt
+                        error.details["cumulative_tokens_generated"] = (
+                            cumulative_tokens_generated
+                        )
+                        error.details["cumulative_tokens_prompt"] = (
+                            cumulative_tokens_prompt
+                        )
                         raise error
 
                 validated_response = self.validator.validate(
@@ -393,9 +396,9 @@ class ConversationOrchestrator:
                     )
                     # Include cumulative metrics for transcript recording
                     error.details["cumulative_time_ms"] = round(cumulative_time_ms, 3)
-                    error.details[
-                        "cumulative_tokens_generated"
-                    ] = cumulative_tokens_generated
+                    error.details["cumulative_tokens_generated"] = (
+                        cumulative_tokens_generated
+                    )
                     error.details["cumulative_tokens_prompt"] = cumulative_tokens_prompt
                     raise error
 
@@ -450,11 +453,11 @@ class ConversationOrchestrator:
                 )
 
                 # Debug prompts if requested
-                if os.environ.get("MAC_FAIRNESS_PROMPT_DEBUG_FLAG"):
-                    print(f"\n{'='*60}")
+                if os.environ.get("MAC_FAIRNESS_DEBUG_FLAG"):
+                    print(f"\n{'=' * 60}")
                     print(f"PROMPT for {agent_id} (Round {round_id}):")
                     print(prompt)
-                    print(f"{'='*60}\n")
+                    print(f"{'=' * 60}\n")
 
                 try:
                     # Generate response with validation
@@ -652,6 +655,10 @@ class ConversationOrchestrator:
         total_time_ms = 0
         total_tokens_generated = 0
         total_tokens_prompt = 0
+        max_prompt_tokens = 0  # Max prompt tokens in any single generation
+        max_combined_tokens = (
+            0  # Max (prompt + generated) for context length optimization
+        )
         total_retry_attempts = retry_stats.get("total_retry_attempts", 0)
         validation_errors = []
 
@@ -683,6 +690,11 @@ class ConversationOrchestrator:
                 total_time_ms += gen_time
                 total_tokens_generated += tokens_gen
                 total_tokens_prompt += tokens_prompt
+
+                # Track max tokens for context length optimization
+                max_prompt_tokens = max(max_prompt_tokens, tokens_prompt)
+                combined = tokens_prompt + tokens_gen
+                max_combined_tokens = max(max_combined_tokens, combined)
 
                 # Per-agent
                 if agent_id in per_agent:
@@ -736,6 +748,8 @@ class ConversationOrchestrator:
             "time_seconds": round(total_time_ms / 1000.0, 3),
             "tokens_generated": total_tokens_generated,
             "tokens_prompt": total_tokens_prompt,
+            "max_prompt_tokens": max_prompt_tokens,
+            "max_combined_tokens": max_combined_tokens,
             "retry_attempts": total_retry_attempts,
             "consensus_reached": summary.get("consensus_reached"),
             "validation_errors": validation_errors,
@@ -767,14 +781,30 @@ class ConversationOrchestrator:
         with open(questions_file, "r") as f:
             all_questions = [json.loads(line) for line in f if line.strip()]
 
-        # Validate all questions first - fail fast on invalid questions
+        print(f"✓ Loaded {len(all_questions)} questions from {questions_file.name}")
+
+        # Apply range FIRST to avoid validating all questions during testing
+        if question_range:
+            start_idx, end_idx = question_range
+            questions_to_validate = all_questions[start_idx:end_idx]
+            print(
+                f"  Processing range {start_idx}-{end_idx} ({len(questions_to_validate)} questions)"
+            )
+        else:
+            questions_to_validate = all_questions
+
+        # Validate questions
         invalid_questions = []
-        for q_idx, q in enumerate(all_questions):
+        for q_idx, q in enumerate(questions_to_validate):
             try:
                 validated_q = self.validator.validate("question", q)
                 questions.append(validated_q)
             except ValidationError as e:
-                invalid_questions.append({"index": q_idx, "error": str(e)})
+                # Store absolute index if range was applied
+                abs_idx = (start_idx + q_idx) if question_range else q_idx
+                invalid_questions.append({"index": abs_idx, "error": str(e)})
+
+        print(f"✓ Validated {len(questions)} questions")
 
         # Fail if any questions are invalid - indicates data corruption
         if invalid_questions:
@@ -788,14 +818,6 @@ class ConversationOrchestrator:
                 details={"invalid_questions": invalid_questions},
             )
 
-        # Apply range if specified
-        if question_range:
-            start_idx, end_idx = question_range
-            questions = questions[start_idx:end_idx]
-            print(f"Processing questions {start_idx} to {end_idx}")
-        else:
-            print(f"Processing all {len(questions)} valid questions")
-
         # Process questions
         questions_succeeded = 0
         questions_partial = 0
@@ -803,11 +825,13 @@ class ConversationOrchestrator:
         error_summary = []
         per_transcript_stats = []
 
+        print(f"\nProcessing {len(questions)} questions...")
+
         for idx, question in enumerate(questions):
             question_id = question.get("question_id", f"q_{idx}")
-            print(f"\n{'='*60}")
-            print(f"Processing question {idx+1}/{len(questions)}: {question_id}")
-            print(f"{'='*60}")
+            print(f"\n{'=' * 60}")
+            print(f"Processing question {idx + 1}/{len(questions)}: {question_id}")
+            print(f"{'=' * 60}")
 
             try:
                 # Run conversation
@@ -893,15 +917,15 @@ class ConversationOrchestrator:
         )
 
         # Print summary
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("EXPERIMENT COMPLETE")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Total questions: {len(questions)}")
         print(f"Succeeded: {questions_succeeded}")
         print(f"Partial: {questions_partial}")
         print(f"Failed: {questions_failed}")
         if len(questions) > 0:
-            print(f"Success rate: {questions_succeeded/len(questions)*100:.1f}%")
+            print(f"Success rate: {questions_succeeded / len(questions) * 100:.1f}%")
         else:
             print("Success rate: N/A (no questions processed)")
         print(f"Duration: {(end_time - start_time).total_seconds():.1f}s")

@@ -42,7 +42,7 @@ For quick analysis without reading all messages:
 - Consensus indicators (`consensus_reached`: `true`/`false`/`null`)
 - Performance metrics (`performance_metrics`):
   - Total tokens generated in this conversation (`total_tokens`)
-  - Total prompt tokens processed (`total_prompt_tokens`)
+  - Total and max prompt tokens processed (`total_prompt_tokens`)
   - Total time for this conversation (`total_time_seconds`)
   - Average response time per message (`average_response_time_ms`)
 - Retry statistics (`retry_statistics`: auto-generated from Zod validation, no LLM involvement):
@@ -271,6 +271,8 @@ Complete vLLM config actually used:
 
 - Total tokens generated across all conversations (`total_tokens_generated`)
 - Total prompt tokens processed (`total_prompt_tokens`)
+- Max prompt tokens in any single LLM call (`max_prompt_tokens`) - useful for `max_model_len` optimization
+- Max combined tokens (prompt + generation) in any single call (`max_combined_tokens`) - the actual context length needed
 - Total wall-clock time (`total_wall_clock_seconds`)
 - Breakdown: inference time vs. overhead time (`inference_time_seconds`, `overhead_time_seconds`)
 - Per-agent token statistics (`per_agent_stats`):
@@ -377,13 +379,15 @@ Useful for:
   "token_time_statistics": {
     "total_tokens_generated": 152847,
     "total_prompt_tokens": 1053291,
+    "max_prompt_tokens": 2847,
+    "max_combined_tokens": 3102,
     "total_wall_clock_seconds": 5215,
     "inference_time_seconds": 5049,
     "overhead_time_seconds": 166,
     "per_agent_stats": [
-      {"agent_id": "spkr_000", "role": "participant", "...": "token stats"},
-      {"agent_id": "spkr_001", "role": "participant", "...": "token stats"},
-      {"agent_id": "spkr_002", "role": "participant", "...": "token stats"}
+      { "agent_id": "spkr_000", "role": "participant", "...": "token stats" },
+      { "agent_id": "spkr_001", "role": "participant", "...": "token stats" },
+      { "agent_id": "spkr_002", "role": "participant", "...": "token stats" }
     ]
   },
   "processing_statistics": {
@@ -415,21 +419,19 @@ Useful for:
     "conversations_with_retries": 45,
     "average_retries_per_conversation": 0.435,
     "by_agent": [
-      {"agent_id": "spkr_000", "retries": 28, "messages": 400},
-      {"agent_id": "spkr_001", "retries": 31, "messages": 400},
-      {"agent_id": "spkr_002", "retries": 28, "messages": 400}
+      { "agent_id": "spkr_000", "retries": 28, "messages": 400 },
+      { "agent_id": "spkr_001", "retries": 31, "messages": 400 },
+      { "agent_id": "spkr_002", "retries": 28, "messages": 400 }
     ],
-    "by_role": [
-      {"role": "participant", "retries": 87, "messages": 1200}
-    ],
+    "by_role": [{ "role": "participant", "retries": 87, "messages": 1200 }],
     "validation_errors_by_type": [
-      {"error_code": "INVALID_ANSWER", "count": 42},
-      {"error_code": "MISSING_STRUCTURED_OUTPUT", "count": 23},
-      {"error_code": "JSON_DECODE_ERROR", "count": 22}
+      { "error_code": "INVALID_ANSWER", "count": 42 },
+      { "error_code": "MISSING_STRUCTURED_OUTPUT", "count": 23 },
+      { "error_code": "JSON_DECODE_ERROR", "count": 22 }
     ],
     "questions_with_most_retries": [
-      {"question_id": "bbq_race_434", "retries": 8},
-      {"question_id": "bbq_race_456", "retries": 7}
+      { "question_id": "bbq_race_434", "retries": 8 },
+      { "question_id": "bbq_race_456", "retries": 7 }
     ],
     "messages_exceeded_retry_limit": 2
   },
@@ -445,7 +447,7 @@ Useful for:
       "retry_attempts": 1,
       "consensus_reached": true,
       "validation_errors": [],
-      "per_agent": {"...": "per-agent token/retry stats"}
+      "per_agent": { "...": "per-agent token/retry stats" }
     },
     {
       "transcript_id": "660e8400-e29b-41d4-a716-446655440001",
@@ -458,9 +460,9 @@ Useful for:
       "retry_attempts": 9,
       "consensus_reached": null,
       "validation_errors": ["..."],
-      "per_agent": {"...": "per-agent token/retry stats"}
+      "per_agent": { "...": "per-agent token/retry stats" }
     },
-    {"...": "... (198 more entries)"}
+    { "...": "... (198 more entries)" }
   ],
   "created_at": "2025-12-04T13:42:18.987654Z"
 }

@@ -320,6 +320,16 @@ class BookkeepingManager:
             stat.get("time_seconds", 0) for stat in per_transcript_stats
         )
 
+        # Find max tokens across all transcripts (for context length optimization)
+        max_prompt_tokens = max(
+            (stat.get("max_prompt_tokens", 0) for stat in per_transcript_stats),
+            default=0,
+        )
+        max_combined_tokens = max(
+            (stat.get("max_combined_tokens", 0) for stat in per_transcript_stats),
+            default=0,
+        )
+
         # Calculate overhead
         inference_time = total_conversation_time
         overhead_time = total_duration - inference_time
@@ -351,6 +361,8 @@ class BookkeepingManager:
         token_time_statistics = {
             "total_tokens_generated": total_tokens_generated,
             "total_prompt_tokens": total_prompt_tokens,
+            "max_prompt_tokens": max_prompt_tokens,
+            "max_combined_tokens": max_combined_tokens,
             "total_wall_clock_seconds": round(total_duration, 3),
             "inference_time_seconds": round(inference_time, 3),
             "overhead_time_seconds": round(max(0, overhead_time), 3),

@@ -2,6 +2,7 @@
 
 from typing import Dict, Any
 from .ollama_agent import OllamaAgent
+from .vllm_agent import VLLMAgent
 
 
 class ModelFactory:
@@ -83,7 +84,7 @@ class ModelFactory:
             return self._create_vllm_agent(agent_config, model_config)
         else:
             raise ValueError(
-                f"Unsupported backend: {backend}. " "Supported backends: ollama, vllm"
+                f"Unsupported backend: {backend}. Supported backends: ollama, vllm"
             )
 
     def _detect_backend(self, model_name: str, model_config: Dict[str, Any]) -> str:
@@ -122,13 +123,11 @@ class ModelFactory:
 
         # vLLM-specific patterns
         if "model_path" in model_config:
-            # HuggingFace model paths or local paths typically use vLLM
+            # HuggingFace model paths (org/model format) or local paths typically use vLLM
+            # Detection is based on path structure, not hardcoded vendor names
             model_path = model_config["model_path"]
-            if (
-                "/" in model_path
-                or model_path.startswith("meta-")
-                or model_path.startswith("mistralai")
-            ):
+            # HuggingFace format: "organization/model-name" or absolute/relative path
+            if "/" in model_path:
                 return "vllm"
 
         # Check for vLLM-specific configuration
@@ -170,7 +169,7 @@ class ModelFactory:
 
     def _create_vllm_agent(
         self, agent_config: Dict[str, Any], model_config: Dict[str, Any]
-    ) -> Any:
+    ) -> VLLMAgent:
         """Create a vLLM agent instance.
 
         Args:
@@ -181,7 +180,7 @@ class ModelFactory:
             VLLMAgent instance
 
         Raises:
-            NotImplementedError: vLLM backend not yet implemented
+            ValueError: If configuration is invalid
         """
         # Check for required vLLM configuration
         if "model_path" not in model_config and "model_name" not in model_config:
@@ -190,12 +189,9 @@ class ModelFactory:
                 "Example: 'meta-llama/Llama-3.1-8B-Instruct'"
             )
 
-        # Would implement shared model instance caching here
-        # For now, not implemented
-        raise NotImplementedError(
-            "vLLM backend not yet implemented. "
-            "Please use 'backend: ollama' in your model configuration for development testing."
-        )
+        # Create and return vLLM agent
+        # VLLMAgent handles shared model instance caching internally
+        return VLLMAgent(agent_config, model_config)
 
     def get_backend_info(self) -> Dict[str, Any]:
         """Get information about configured backends and models.
@@ -219,6 +215,5 @@ class ModelFactory:
         """String representation of factory."""
         model_list = list(self.model_definitions.keys())
         return (
-            f"ModelFactory(shared_backbone={self.shared_backbone}, "
-            f"models={model_list})"
+            f"ModelFactory(shared_backbone={self.shared_backbone}, models={model_list})"
         )

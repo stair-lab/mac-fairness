@@ -21,6 +21,9 @@ data/*
 !data/dev_ollama/
 data/dev_ollama/*
 !data/dev_ollama/bbq_race_sample_0-9.jsonl
+!data/dev_snap/
+data/dev_snap/*
+!data/dev_snap/bbq_race.jsonl
 
 # Node.js / TypeScript
 node_modules/

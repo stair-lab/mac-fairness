@@ -44,13 +44,13 @@ export MAC_FAIRNESS_EXPERIMENT_ROOT="/path/to/save/experiments"
 python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
 
 # Slurm submission (creates snapshot at queuing time):
-./script/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml
+./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml
 
 # Slurm array job (divides questions evenly among tasks):
-./script/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20
+./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20
 
 # Slurm array job with manual question count:
-./script/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20 --total-questions 6879
+./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20 --total-questions 6879
 
 # 6. Query results
 # TODO
@@ -166,7 +166,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │   ├── run_experiment.py                   # Run full experiment (all questions)
 │   ├── submit_slurm.sh                     # Submit to Slurm (creates config snapshot)
 │   ├── query_index.py                      # Query index
-│   └── formatters/                         # Benchmark data formatters
+│   └── formatter/                         # Benchmark data formatter
 │       ├── bbq_formatter.py
 │       ├── diff_aware_formatter.py
 │       └── discrim_eval_formatter.py
@@ -342,12 +342,12 @@ The framework requires questions in a unified JSONL format that conforms to the 
 
 ```bash
 # Format BBQ benchmark
-python script/formatters/bbq_formatter.py \
+python script/formatter/bbq_formatter.py \
   --input ./raw_data/BBQ/data/Race_ethnicity.jsonl \
   --output ./data/bbq/bbq_race.jsonl
 
 # Format DiscrimEval benchmark
-python script/formatters/discrim_eval_formatter.py \
+python script/formatter/discrim_eval_formatter.py \
   --input ./raw_data/discrim-eval/explicit.jsonl \
   --output ./data/discrim_eval/discrim_eval_gender.jsonl
 ```
@@ -391,13 +391,13 @@ python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demog
 
 ```bash
 # Submit single job to Slurm (snapshot saved at queuing time)
-./script/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
+./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
 
 # Submit array job (divides questions evenly among tasks)
-./script/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --array-tasks 20
+./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --array-tasks 20
 
 # Array job with manual question count
-./script/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --array-tasks 20 --total-questions 6879
+./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --array-tasks 20 --total-questions 6879
 ```
 
 **Execution workflow:**

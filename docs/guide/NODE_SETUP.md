@@ -32,8 +32,9 @@ export MAC_FAIRNESS_EXPERIMENT_ROOT="${MAC_FAIRNESS_WORKSPACE}/experiment"
 export HF_HOME="${LFS_HOME}/.cache/huggingface"
 export HF_HUB_CACHE="${HF_HOME}/hub"
 
-# CUDA 12.4
-export CUDA_HOME=/usr/local/cuda-12.4
+# CUDA - set to the version available on your node
+# Find available versions: ls /usr/local/cuda*
+export CUDA_HOME=/usr/local/cuda  # or specific version like /usr/local/cuda-12.4
 export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ```
@@ -54,7 +55,11 @@ source .venv/bin/activate
 # Install dependencies from pyproject.toml
 uv pip install -e .
 
+# Install FlashInfer in a more reliable way
+./script/cluster/build_flashinfer.sh
+
 # Verify
+source .venv/bin/activate
 python -c "import vllm; print(f'vLLM: {vllm.__version__}')"
 python -c "from huggingface_hub import HfApi; print('HF Hub: OK')"
 ```
@@ -73,6 +78,7 @@ npm install
 npm run build
 
 # Verify
+npm install -g tsx
 ls dist/validate.js
 
 cd ../..
@@ -86,11 +92,11 @@ cd ../..
 # Ensure HF_TOKEN is set
 echo $HF_TOKEN
 
-# Run download script (downloads 11 models, ~101 GB)
-./script/download_models.sh
+# Run download script (downloads 13 models, ~123 GB)
+./script/cluster/download_models.sh
 ```
 
-### Tiny/Small/Medium (all <10B params): 11 models, ~101 GB
+### Tiny/Small (all <10B params): 13 models, ~123 GB
 
 - [Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) (3.1 GB)
 - [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct) (6.2 GB)
@@ -100,7 +106,9 @@ echo $HF_TOKEN
 - [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) (32.1 GB)
 - [meta-llama/Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct) (5.0 GB)
 - [meta-llama/Llama-3.2-3B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct) (12.9 GB)
+- [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3) (14.5 GB)
 - [microsoft/Phi-3-mini-4k-instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) (7.6 GB)
+- [microsoft/Phi-3-mini-128k-instruct](https://huggingface.co/microsoft/Phi-3-mini-128k-instruct) (7.6 GB)
 - [microsoft/Phi-3.5-mini-instruct](https://huggingface.co/microsoft/Phi-3.5-mini-instruct) (7.6 GB)
 - [microsoft/Phi-4-mini-instruct](https://huggingface.co/microsoft/Phi-4-mini-instruct) (7.7 GB)
 
@@ -108,8 +116,7 @@ echo $HF_TOKEN
 
 - **Llama models:** Accept license before downloading
 - **Sampling params:** Use common defaults (see Model Configurations below)
-- **vLLM support:** Verify at https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/models
-- **Disk space:** ~101 GB required
+- **vLLM support:** Verify at [vLLM model executor page](https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/models)
 
 ---
 
@@ -142,45 +149,75 @@ EOF
 
 ### vLLM Common Settings
 
+> **Important:** The values below are **starting points**, not production values.
+> Use `script/cluster/vllm_param_sweep.py` to find optimal parameters for your specific GPU.
+
 ```yaml
 vllm_config:
   tensor_parallel_size: 1 # GPUs for model parallelism
-  gpu_memory_utilization: 0.85 # Conservative: 85% (safer across GPU types)
-  max_num_seqs: 8 # Max parallel sequences/requests
-  max_model_len: 4096 # Max context length
-  enable_prefix_caching: true # Cache common prompts
+  gpu_memory_utilization: 0.85 # conservative starting point
+  max_num_seqs: 8 # starting batch size - tune with param sweep
+  max_model_len: 8192 # max context length
+  enable_prefix_caching: true # cache common prompts
 ```
 
 **Parameter Explanations:**
 
 - **`max_num_seqs`**: Maximum batch size (parallel requests)
-  - vLLM does NOT auto-tune this - you must set it manually
-  - Start with 4-8, increase gradually if no OOM
   - Higher = better throughput, but more GPU memory needed
 - **`gpu_memory_utilization`**: Fraction of GPU RAM for model + KV cache
-  - 0.85 (85%) is conservative and safe across different GPUs
-  - 0.9 (90%) for well-tested GPU types
+  - 0.85 (85%) is a safe starting point
+  - 0.9 (90%) may work after testing
   - Leave headroom for framework overhead and temporary buffers
-- **OOM prevention across multiple GPU types:**
-  - Use conservative `gpu_memory_utilization: 0.85` initially
-  - Start with lower `max_num_seqs: 4` on smaller GPUs (16GB)
-  - Increase `max_num_seqs` on larger GPUs (40GB, 80GB)
-  - Monitor with `nvidia-smi` together with job summaries
+- **OOM prevention:**
+  - Start with conservative values, increase via parameter sweep
+  - Monitor with `nvidia-smi` and job summaries
   - Can still OOM if `max_num_seqs` x `max_model_len` is too large
 
-**Recommended settings by example GPU type (for 8B models like Llama-3.1-8B):**
+**Reference rule-of-thumb ranges by GPU memory (use param sweep to find exact values):**
 
-| GPU Model       | VRAM  | gpu_memory_util | max_num_seqs | max_model_len | Notes                                      |
-| --------------- | ----- | --------------- | ------------ | ------------- | ------------------------------------------ |
-| V100 PCIe/SXM2  | 32GB  | 0.85            | 8-12         | 8192          | Comfortable for 8B                         |
-| L40S            | 48GB  | 0.9             | 12-16        | 8192          | Excellent for 8B, can handle some batching |
-| Quadro RTX 8000 | 48GB  | 0.9             | 12-16        | 8192          | Same tier as L40S                          |
-| H100 SXM5       | 80GB  | 0.9             | 16-32        | 8192          | High throughput, great batching            |
-| A100 80GB       | 80GB  | 0.9             | 16-32        | 8192          | Production-grade performance               |
-| H200            | 144GB | 0.9             | 32-64        | 8192          | Massive batching capability                |
-| B200            | 192GB | 0.9             | 64-128       | 8192          | Extreme batching, overkill for 8B          |
+| GPU Memory | Example GPUs    | max_num_seqs range | Notes                    |
+| ---------- | --------------- | ------------------ | ------------------------ |
+| 16-24 GB   | RTX 4090, A4000 | 4-12               | Small batches only       |
+| 32 GB      | V100-32GB       | 8-16               | Comfortable for 8B       |
+| 48 GB      | L40S, A6000     | 12-24              | Good batching capability |
+| 80 GB      | H100, A100-80GB | 16-64              | High throughput possible |
+| 144+ GB    | H200, B200      | 32-128             | Extreme batching         |
 
-> **Omitted:** RTX 2080 Ti (11GB), RTX A4000 (16GB), P100 PCIe (16 GB), V100 SXM2 (16GB), P40 (24GB)
+> **Note:** These ranges are approximate. Always run `script/cluster/vllm_param_sweep.py`
+> on your target hardware to find the optimal `max_num_seqs` value.
+
+### Running Parameter Sweep
+
+Use `script/cluster/vllm_param_sweep.py` to find optimal parameters for your GPU:
+
+```bash
+# Quick validation test (10 questions, uses config as-is)
+python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml --quick-test
+
+# Auto-suggest parameters based on detected GPU and run sweep
+python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \
+    --auto-suggest --questions 512
+
+# Sweep specific max_num_seqs values
+python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \
+    --max-num-seqs 8 16 32 64 128 --questions 512
+
+# Sweep multiple parameters
+python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \
+    --max-num-seqs 8 16 32 64 128 \
+    --gpu-memory-util 0.85 0.9 \
+    --questions 512
+
+# Dry run (see what would be tested without running)
+python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \
+    --auto-suggest --questions 512 --dry-run
+
+# Generate report from previous runs
+python script/cluster/vllm_param_sweep.py --report-only --benchmark dev_snap
+```
+
+To test a different model, edit `config/dev_snap/base_sweep.yaml` and change `model_path`.
 
 **Model size recommendations by GPU:**
 
@@ -188,11 +225,6 @@ vllm_config:
 - **24-32GB GPUs:** Good for 4B-8B models (all models in download list)
 - **48GB+ GPUs:** Comfortable for 8B, can handle larger batches
 - **80GB+ GPUs:** Can explore larger models (14B+) or high `max_num_seqs`
-- Check GPUs on Slurm system
-
-  ```shell
-  sinfo -o "%200f %G" -p gpu | grep -o 'GPU_SKU:[^ ,]*,GPU_MEM:[^ ,]*' | sort -u
-  ```
 
 ### Gemma Family
 
@@ -224,6 +256,19 @@ Llama-3.2-3B-Instruct:  max_model_len: 8192,  GPU: ~8 GB
 Llama-3.1-8B-Instruct:  max_model_len: 8192,  GPU: ~18 GB
 ```
 
+### Mistral Family
+
+```yaml
+# Mistral models use bfloat16
+# No official sampling params - use common defaults
+dtype: bfloat16
+temperature: 0.7
+top_p: 0.9
+
+# GPU memory requirements
+Mistral-7B-Instruct-v0.3:  max_model_len: 32768,  GPU: ~16 GB
+```
+
 ### Phi Family
 
 ```yaml
@@ -233,9 +278,10 @@ dtype: float16
 temperature: 0.7
 
 # GPU memory requirements
-Phi-3-mini-4k-instruct:  max_model_len: 4096,  GPU: ~8 GB
-Phi-3.5-mini-instruct:   max_model_len: 8192,  GPU: ~8 GB
-Phi-4-mini-instruct:     max_model_len: 8192,  GPU: ~8 GB
+Phi-3-mini-4k-instruct:    max_model_len: 4096,   GPU: ~8 GB
+Phi-3-mini-128k-instruct:  max_model_len: 131072, GPU: ~8 GB
+Phi-3.5-mini-instruct:     max_model_len: 131072, GPU: ~8 GB
+Phi-4-mini-instruct:       max_model_len: 131072, GPU: ~8 GB
 ```
 
 ### Qwen Family
@@ -304,7 +350,7 @@ npm run build
 cd ../..
 
 # Download models (requires HF_TOKEN)
-./script/download_models.sh
+./script/cluster/download_models.sh
 
 # Verify
 echo "Setup complete! Verifying..."

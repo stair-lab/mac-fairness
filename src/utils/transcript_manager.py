@@ -239,10 +239,14 @@ class TranscriptManager:
         """
         benchmark = config["experiment_metadata"]["benchmark_subcategory"]
 
-        # Use separate index for dev_ollama, production uses main index
-        # Both are in bookkeeping/ directory
+        # Use separate index for dev benchmarks, production uses main index
+        # All are in bookkeeping/ directory
         if benchmark == "dev_ollama":
             index_path = self.project_root / "bookkeeping" / "dev_ollama_index.jsonl"
+        elif benchmark == "dev_snap":
+            index_path = self.project_root / "bookkeeping" / "dev_snap_index.jsonl"
+        elif benchmark == "dev_sherlock":
+            index_path = self.project_root / "bookkeeping" / "dev_sherlock_index.jsonl"
         else:
             index_path = self.project_root / "bookkeeping" / "index.jsonl"
 
