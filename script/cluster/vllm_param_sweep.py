@@ -35,6 +35,7 @@ Environment Variables:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,38 @@ def _debug_print(msg: str) -> None:
 def _info_print(msg: str) -> None:
     """Print info message (always shown)."""
     print(msg)
+
+
+def clean_benchmark_data(benchmark: str) -> None:
+    """Clear previous experiment data for the specified benchmark.
+
+    Clears:
+    - bookkeeping/config_snapshot/<benchmark>/*
+    - $MAC_FAIRNESS_EXPERIMENT_ROOT/<benchmark>/*
+
+    Args:
+        benchmark: Benchmark subcategory (e.g., 'dev_snap')
+    """
+    # Clear config snapshots
+    config_snapshot_dir = project_root / "bookkeeping" / "config_snapshot" / benchmark
+    if config_snapshot_dir.exists():
+        _info_print(f"Clearing config snapshots: {config_snapshot_dir}")
+        shutil.rmtree(config_snapshot_dir)
+        config_snapshot_dir.mkdir(parents=True, exist_ok=True)
+        _info_print(f"  ✓ Cleared {config_snapshot_dir.name}/")
+
+    # Clear experiment results
+    exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+    exp_root_path = Path(exp_root)
+    if not exp_root_path.is_absolute():
+        exp_root_path = project_root / exp_root
+    experiment_dir = exp_root_path / benchmark
+
+    if experiment_dir.exists():
+        _info_print(f"Clearing experiment data: {experiment_dir}")
+        shutil.rmtree(experiment_dir)
+        experiment_dir.mkdir(parents=True, exist_ok=True)
+        _info_print(f"  ✓ Cleared {experiment_dir.name}/")
 
 
 def get_gpu_info() -> Optional[Dict[str, Any]]:
@@ -343,11 +376,15 @@ def collect_results(
         if not summary:
             continue
 
-        hw = summary.get("hardware_utilization", {})
         tp = summary.get("throughput_performance", {})
         proc = summary.get("processing_statistics", {})
         vllm_cfg = summary.get("vllm_configuration", {})
         token_stats = summary.get("token_time_statistics", {})
+
+        # vLLM metrics (v0.12.0 Prometheus-style)
+        vllm_metrics = summary.get("vllm_metrics", {})
+        kv_cache = vllm_metrics.get("kv_cache", {})
+        prefix_cache = vllm_metrics.get("prefix_cache", {})
 
         # Extract params from experiment name or config
         results.append(
@@ -361,10 +398,16 @@ def collect_results(
                 "success_rate": proc.get("questions_succeeded", 0)
                 / max(proc.get("questions_attempted", 1), 1)
                 * 100,
-                "peak_mem_gb": hw.get("peak_gpu_memory_gb", 0),
-                "avg_mem_gb": hw.get("average_gpu_memory_gb", 0),
-                "kv_hit_rate": hw.get("kv_cache_stats", {}).get("cache_hit_rate", 0)
-                * 100,
+                # vLLM KV cache metrics
+                "kv_cache_peak_perc": (kv_cache.get("peak_usage_perc") or 0) * 100,
+                "kv_cache_avg_perc": (kv_cache.get("avg_usage_perc") or 0) * 100,
+                # vLLM prefix cache metrics
+                "prefix_cache_hit_rate": (prefix_cache.get("hit_rate") or 0) * 100,
+                "prefix_cache_queries": prefix_cache.get("queries") or 0,
+                "prefix_cache_hits": prefix_cache.get("hits") or 0,
+                # vLLM preemption count (indicates OOM pressure)
+                "preemptions": vllm_metrics.get("preemptions") or 0,
+                # Throughput metrics
                 "tokens_per_sec": tp.get("tokens_per_second", 0),
                 "questions_per_sec": tp.get("questions_per_second", 0),
                 "duration_sec": summary.get("duration_seconds", 0),
@@ -410,16 +453,19 @@ def print_report(
             f"{r['duration_sec'] / 60:.1f} min"
         )
 
-    # Table 2: Memory Usage
+    # Table 2: vLLM KV Cache and Prefix Cache Metrics
     _info_print("\n" + "-" * 90)
+    _info_print("vLLM CACHE METRICS")
+    _info_print("-" * 90)
     _info_print(
-        f"{'max_num_seqs':<14} {'Peak Mem':<14} {'Avg Mem':<14} {'KV Hit Rate':<14}"
+        f"{'max_num_seqs':<14} {'KV Peak%':<12} {'KV Avg%':<12} {'Prefix Hit%':<14} {'Preempts':<10}"
     )
     _info_print("-" * 90)
     for r in results:
         _info_print(
-            f"{r['max_num_seqs']:<14} {r['peak_mem_gb']:.1f} GB{'':<8} "
-            f"{r['avg_mem_gb']:.1f} GB{'':<8} {r['kv_hit_rate']:.1f}%"
+            f"{r['max_num_seqs']:<14} {r['kv_cache_peak_perc']:.1f}%{'':<7} "
+            f"{r['kv_cache_avg_perc']:.1f}%{'':<7} {r['prefix_cache_hit_rate']:.1f}%{'':<9} "
+            f"{r['preemptions']}"
         )
 
     # Table 3: Throughput
@@ -468,11 +514,21 @@ def print_report(
             _info_print("\n" + "=" * 90)
             _info_print("RECOMMENDATION")
             _info_print("=" * 90)
-            _info_print(f"\nBest throughput with high success rate:")
+            _info_print("\nBest throughput with high success rate:")
             _info_print(f"  max_num_seqs: {best_tps['max_num_seqs']}")
             _info_print(f"  gpu_memory_utilization: {best_tps['gpu_memory_util']}")
             _info_print(f"  tokens/sec: {best_tps['tokens_per_sec']:.2f}")
-            _info_print(f"  peak memory: {best_tps['peak_mem_gb']:.1f} GB")
+            _info_print(f"  KV cache peak usage: {best_tps['kv_cache_peak_perc']:.1f}%")
+            _info_print(
+                f"  prefix cache hit rate: {best_tps['prefix_cache_hit_rate']:.1f}%"
+            )
+
+            # Warn about preemptions (indicates OOM pressure)
+            if best_tps["preemptions"] > 0:
+                _info_print(
+                    f"\n⚠ Warning: {best_tps['preemptions']} preemptions occurred. "
+                    "Consider reducing max_num_seqs or gpu_memory_utilization."
+                )
 
             # Check if still improving
             sorted_by_batch = sorted(successful, key=lambda r: r["max_num_seqs"])
@@ -576,6 +632,12 @@ def main():
         help="Show what would be tested without running",
     )
 
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Clear previous experiment data for the benchmark before running",
+    )
+
     args = parser.parse_args()
 
     # Detect GPU
@@ -586,6 +648,10 @@ def main():
         )
     else:
         _info_print("Warning: Could not detect GPU")
+
+    # Handle --clean: clear previous experiment data
+    if args.clean:
+        clean_benchmark_data(args.benchmark)
 
     # Handle report-only mode
     if args.report_only:

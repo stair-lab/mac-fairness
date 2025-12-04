@@ -59,6 +59,9 @@ model_config:
         dtype: auto # let vLLM auto-detect optimal dtype
         max_num_seqs: 8
         enable_prefix_caching: true
+        # Enable vLLM metrics collection (KV cache, prefix cache, preemptions)
+        # Useful for parameter tuning; disable in production to reduce overhead
+        collect_metrics: true
 
 agent_definitions:
 - agent_id: spkr_000

@@ -384,6 +384,43 @@ class VLLMAgent(BaseAgent):
         }
 
     @classmethod
+    def collect_metrics_snapshot(cls) -> Optional[Dict[str, Any]]:
+        """Collect a metrics snapshot from the shared vLLM engine.
+
+        This method collects vLLM metrics useful for parameter tuning:
+        - KV cache usage
+        - Prefix cache hit rate
+        - Request queue state
+        - Preemption count
+
+        Returns:
+            Dictionary with metrics, or None if no model is loaded
+        """
+        if not cls._shared_models:
+            return None
+
+        # Get the first (typically only) shared model
+        llm = next(iter(cls._shared_models.values()))
+
+        try:
+            from src.utils.vllm_metrics import VLLMMetricsCollector
+
+            collector = VLLMMetricsCollector()
+            snapshot = collector.collect_snapshot(llm)
+            return {
+                "kv_cache_usage_perc": snapshot.kv_cache_usage_perc,
+                "prefix_cache_queries": snapshot.prefix_cache_queries,
+                "prefix_cache_hits": snapshot.prefix_cache_hits,
+                "prefix_cache_hit_rate": snapshot.prefix_cache_hit_rate,
+                "num_requests_running": snapshot.num_requests_running,
+                "num_requests_waiting": snapshot.num_requests_waiting,
+                "num_preemptions_total": snapshot.num_preemptions_total,
+            }
+        except Exception as e:
+            _debug_print(f"Failed to collect metrics: {e}")
+            return None
+
+    @classmethod
     def cleanup_all_models(cls) -> None:
         """Release all cached vLLM models and free GPU memory.
 

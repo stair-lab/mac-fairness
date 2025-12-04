@@ -195,6 +195,9 @@ Use `script/cluster/vllm_param_sweep.py` to find optimal parameters for your GPU
 # Quick validation test (10 questions, uses config as-is)
 python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml --quick-test
 
+# Clean previous results and run quick test
+python script/cluster/vllm_param_sweep.py --clean --config config/dev_snap/base_sweep.yaml --quick-test
+
 # Auto-suggest parameters based on detected GPU and run sweep
 python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \
     --auto-suggest --questions 512
@@ -215,9 +218,42 @@ python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.ya
 
 # Generate report from previous runs
 python script/cluster/vllm_param_sweep.py --report-only --benchmark dev_snap
+
+# Clean previous results only (use with --report-only to just clean)
+python script/cluster/vllm_param_sweep.py --clean --benchmark dev_snap --report-only
 ```
 
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--clean` | Clear previous experiment data (`bookkeeping/config_snapshot/<benchmark>/` and `$MAC_FAIRNESS_EXPERIMENT_ROOT/<benchmark>/`) before running |
+| `--quick-test` | Run quick validation (10 questions, single config) |
+| `--dry-run` | Show what would be tested without running |
+| `--report-only` | Generate report from existing runs |
+| `--auto-suggest` | Auto-suggest parameter ranges based on GPU |
+
 To test a different model, edit `config/dev_snap/base_sweep.yaml` and change `model_path`.
+
+### vLLM Metrics Collection
+
+To collect vLLM metrics (KV cache usage, prefix cache hit rate, preemptions) during sweeps, enable `collect_metrics` in your config:
+
+```yaml
+vllm_config:
+  # ... other settings ...
+  collect_metrics: true  # Enable vLLM metrics collection
+```
+
+This adds the following metrics to job summaries (useful for parameter tuning):
+
+| Metric | Description | Helps tune |
+|--------|-------------|------------|
+| `kv_cache.peak_usage_perc` | Peak KV cache usage (0-1) | `gpu_memory_utilization`, `max_num_seqs` |
+| `prefix_cache.hit_rate` | Prefix cache hit rate (0-1) | `enable_prefix_caching` effectiveness |
+| `preemptions` | Request preemptions (should be 0) | Reduce `max_num_seqs` if > 0 |
+
+**Note:** Disable `collect_metrics` in production to avoid overhead.
 
 **Model size recommendations by GPU:**
 

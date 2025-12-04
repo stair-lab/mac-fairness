@@ -253,12 +253,22 @@ Complete vLLM config actually used:
 - Model path and family (`model_path`, `model_family`)
 - GPU device IDs allocated (`gpu_device_ids`)
 
-### Hardware & Resource Utilization
+### vLLM Metrics (v0.12.0 Prometheus-style)
 
-- GPU information (`gpu_info`: device names, memory capacity)
-- Peak GPU memory usage (`peak_gpu_memory_gb`)
-- Average memory utilization across the job (`average_gpu_memory_gb`)
-- KV cache utilization statistics (`kv_cache_stats`: hit rate, cache size, evictions)
+Metrics collected directly from vLLM's internal statistics, useful for parameter tuning:
+
+- **KV cache** (`kv_cache`):
+  - `peak_usage_perc`: Peak KV cache usage (0-1, where 1 = 100% full)
+  - `avg_usage_perc`: Average KV cache usage across the job
+- **Prefix cache** (`prefix_cache`) - for automatic prefix caching:
+  - `queries`: Total prefix cache queries
+  - `hits`: Total prefix cache hits
+  - `hit_rate`: Hit rate (0-1)
+- **Preemptions** (`preemptions`): Number of request preemptions (indicates OOM pressure - if > 0, consider reducing `max_num_seqs` or `gpu_memory_utilization`)
+- **Requests** (`requests`):
+  - `completed`: Total requests completed
+  - `peak_running`: Peak concurrent requests running
+  - `peak_waiting`: Peak requests waiting in queue
 
 ### Throughput & Performance Metrics
 
@@ -353,21 +363,21 @@ Useful for:
     "gpu_device_ids": [0],
     "enable_prefix_caching": true
   },
-  "hardware_utilization": {
-    "gpu_info": [
-      {
-        "device_id": 0,
-        "name": "NVIDIA A100-SXM4-40GB",
-        "memory_total_gb": 40.0
-      }
-    ],
-    "peak_gpu_memory_gb": 32.4,
-    "average_gpu_memory_gb": 28.7,
-    "kv_cache_stats": {
-      "cache_hit_rate": 0.73,
-      "cache_size_gb": 12.3,
-      "evictions": 145,
-      "average_utilization": 0.82
+  "vllm_metrics": {
+    "kv_cache": {
+      "peak_usage_perc": 0.82,
+      "avg_usage_perc": 0.65
+    },
+    "prefix_cache": {
+      "queries": 15234,
+      "hits": 11125,
+      "hit_rate": 0.73
+    },
+    "preemptions": 0,
+    "requests": {
+      "completed": 512,
+      "peak_running": 16,
+      "peak_waiting": 3
     }
   },
   "throughput_performance": {

@@ -30,6 +30,11 @@ from src.utils.errors import (
     ErrorCollector,
     ProjectRootError,
 )
+from src.utils.vllm_metrics import (
+    VLLMMetricsCollector,
+    get_metrics_collector,
+    reset_metrics_collector,
+)
 
 
 class ConversationOrchestrator:
@@ -756,6 +761,48 @@ class ConversationOrchestrator:
             "per_agent": per_agent,
         }
 
+    def _should_collect_vllm_metrics(self) -> bool:
+        """Check if vLLM metrics collection is enabled in config.
+
+        Configure via: model_config.models.<model>.vllm_config.collect_metrics: true
+
+        Returns:
+            True if metrics collection is enabled, False otherwise (default)
+        """
+        model_config = self.config.get("model_config", {})
+        models = model_config.get("models", {})
+
+        for model_def in models.values():
+            vllm_config = model_def.get("vllm_config", {})
+            if vllm_config.get("collect_metrics", False):
+                return True
+
+        return False
+
+    def _collect_vllm_metrics_snapshot(
+        self, collector: Optional[VLLMMetricsCollector]
+    ) -> None:
+        """Collect a vLLM metrics snapshot from the shared model.
+
+        Args:
+            collector: The VLLMMetricsCollector to record the snapshot (can be None)
+        """
+        if collector is None:
+            return
+
+        try:
+            from src.agent.vllm_agent import VLLMAgent
+
+            # Get the first agent to access the shared model
+            for agent in self.agents.values():
+                if isinstance(agent, VLLMAgent) and agent.llm is not None:
+                    snapshot = collector.collect_snapshot(agent.llm)
+                    collector.record_snapshot(snapshot)
+                    break
+        except Exception:
+            # Silently skip if metrics collection fails
+            pass
+
     def run_experiment(self, question_range: Optional[Tuple[int, int]] = None):
         """Run the full experiment for a set of questions.
 
@@ -770,6 +817,15 @@ class ConversationOrchestrator:
         # Initialize components
         self.initialize_agents()
         self.initialize_router()
+
+        # Check if vLLM metrics collection is enabled (default: False)
+        # Configure via model_config.models.<model>.vllm_config.collect_metrics: true
+        collect_vllm_metrics = self._should_collect_vllm_metrics()
+        vllm_metrics_collector = None
+        if collect_vllm_metrics:
+            reset_metrics_collector()
+            vllm_metrics_collector = get_metrics_collector()
+            self._collect_vllm_metrics_snapshot(vllm_metrics_collector)
 
         # Load and validate questions
         questions = []
@@ -900,6 +956,12 @@ class ConversationOrchestrator:
                 )
                 print(f"✗ Question {question_id} error: {unexpected_error.message}")
 
+        # Collect final vLLM metrics snapshot and get aggregated metrics
+        aggregated_vllm_metrics = None
+        if vllm_metrics_collector is not None:
+            self._collect_vllm_metrics_snapshot(vllm_metrics_collector)
+            aggregated_vllm_metrics = vllm_metrics_collector.get_aggregated().to_dict()
+
         # Save job summary with comprehensive statistics
         end_time = datetime.now(timezone.utc)
         self.bookkeeping.save_job_summary(
@@ -914,6 +976,7 @@ class ConversationOrchestrator:
             error_summary=error_summary if error_summary else None,
             per_transcript_stats=per_transcript_stats if per_transcript_stats else None,
             config_snapshot_path=self.snapshot_path,
+            vllm_metrics=aggregated_vllm_metrics,
         )
 
         # Print summary

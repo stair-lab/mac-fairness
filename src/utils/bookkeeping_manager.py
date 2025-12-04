@@ -91,6 +91,7 @@ class BookkeepingManager:
         error_summary: Optional[List[Dict[str, Any]]] = None,
         per_transcript_stats: Optional[List[Dict[str, Any]]] = None,
         config_snapshot_path: Optional[str] = None,
+        vllm_metrics: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Save a comprehensive job summary for the experiment run.
 
@@ -105,6 +106,7 @@ class BookkeepingManager:
             question_range: Optional question range processed
             error_summary: Optional list of error information
             per_transcript_stats: Optional list of per-transcript statistics
+            vllm_metrics: Optional vLLM metrics (v0.12.0 Prometheus-style)
 
         Returns:
             Path to the saved job summary file
@@ -166,7 +168,6 @@ class BookkeepingManager:
             "end_time": format_timestamp(end_time),
             "duration_seconds": round(duration_seconds, 3),
             "config_snapshot": config_snapshot_path or "",
-            "hostname": os.uname().nodename,
             # Experiment configuration
             "experiment_configuration": {
                 "routing_strategy": conv_config.get("routing_strategy"),
@@ -191,16 +192,25 @@ class BookkeepingManager:
             f"{backend}_configuration": self._build_backend_config(
                 model_config, backend
             ),
-            # Hardware utilization (placeholder - requires runtime monitoring)
-            "hardware_utilization": aggregated_stats.get(
-                "hardware_utilization",
-                {
-                    "gpu_info": [],
-                    "peak_gpu_memory_gb": None,
-                    "average_gpu_memory_gb": None,
-                    "kv_cache_stats": None,
+            # vLLM-specific metrics (from vLLM v0.12.0 Prometheus metrics)
+            "vllm_metrics": vllm_metrics
+            or {
+                "kv_cache": {
+                    "peak_usage_perc": None,
+                    "avg_usage_perc": None,
                 },
-            ),
+                "prefix_cache": {
+                    "queries": None,
+                    "hits": None,
+                    "hit_rate": None,
+                },
+                "preemptions": None,
+                "requests": {
+                    "completed": None,
+                    "peak_running": None,
+                    "peak_waiting": None,
+                },
+            },
             # Throughput and performance metrics
             "throughput_performance": aggregated_stats.get(
                 "throughput_performance", {}
@@ -274,8 +284,8 @@ class BookkeepingManager:
                     "tensor_parallel_size": vllm_config.get("tensor_parallel_size"),
                     "gpu_memory_utilization": vllm_config.get("gpu_memory_utilization"),
                     "max_model_len": vllm_config.get("max_model_len"),
+                    "max_num_seqs": vllm_config.get("max_num_seqs"),
                     "dtype": vllm_config.get("dtype"),
-                    "gpu_device_ids": vllm_config.get("gpu_device_ids", []),
                     "enable_prefix_caching": vllm_config.get(
                         "enable_prefix_caching", False
                     ),
