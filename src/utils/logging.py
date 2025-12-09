@@ -34,11 +34,8 @@ _EXPERIMENT_ROOT_VAR = "$MAC_FAIRNESS_EXPERIMENT_ROOT"
 ERROR_CODE_MESSAGES = {
     "INVALID_ANSWER": "Invalid answer: has to be from choice text",
     "MISSING_STRUCTURED_OUTPUT": "Missing structured output in response",
-    "ZOD_VALIDATION_FAILED": "Response format validation failed",
-    "JSON_DECODE_FAILED": "Failed to parse JSON from response",
     "MAX_LENGTH_EXCEEDED": "Response exceeded maximum token limit",
     "MAX_RETRIES_EXCEEDED": "Maximum retry attempts exceeded",
-    "UNEXPECTED_ERROR": "Unexpected error during execution",
 }
 
 

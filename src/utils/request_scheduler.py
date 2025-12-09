@@ -439,7 +439,7 @@ class RequestScheduler:
         self.model_in_flight: Dict[str, int] = {}
         self._init_model_semaphores()
 
-        # Build dependency graph
+        # Build speak-after dependency graph
         self.dependencies: Dict[str, Set[str]] = {}
         for agent_config in self.agent_defs:
             agent_id = agent_config["agent_id"]

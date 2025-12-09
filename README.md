@@ -2,7 +2,7 @@
 
 A lightweight, Slurm-compatible framework for running multi-agent conversations with structured output validation. Agents can be instantiated from different model families (Gemma, Llama, Qwen, etc.) with configurable roles, personas, and demographics.
 
-> **New to this project?** Start with the [dev_ollama walkthrough](docs/guide/dev_ollama_walkthrough.ipynb) - a complete demo you can run locally without GPU using Ollama.
+> **New to this project?** Start with the [dev_ollama_walkthrough.ipynb](docs/guide/dev_ollama_walkthrough.ipynb) - a complete demo you can run locally without GPU using Ollama.
 
 ## Table of Contents
 
@@ -26,19 +26,13 @@ uv venv
 source .venv/bin/activate
 uv pip install -e .
 
-# 2. Set up Zod validation system
-cd schema/2025-11-27
-npm install
-npm run build
-cd ../..
-
-# 3. Test the framework on local dev machine (no GPU required)
+# 2. Test the framework on local dev machine (no GPU required)
 # For complete testing guide: see docs/guide/dev_ollama_walkthrough.ipynb
 
-# 4. Set experiments directory (recommended, otherwise defaults to $MAC_FAIRNESS_WORKSPACE/experiment)
+# 3. Set experiments directory (recommended, otherwise defaults to $MAC_FAIRNESS_WORKSPACE/experiment)
 export MAC_FAIRNESS_EXPERIMENT_ROOT="/path/to/save/experiments"
 
-# 5. Run a real experiment locally or submit to Slurm
+# 4. Run a real experiment locally or submit to Slurm
 # Local execution:
 python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
 
@@ -51,7 +45,7 @@ python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demog
 # Slurm array job with manual question count:
 ./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20 --total-questions 6879
 
-# 6. Query results
+# 5. Query results
 # TODO
 ```
 
@@ -60,7 +54,6 @@ python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demog
 ## 2. Installation
 
 - Python ≥ 3.11
-- Node.js ≥ 18
 - [uv](https://github.com/astral-sh/uv) for Python package management
 
 ```bash
@@ -71,22 +64,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install -e .
-
-# 3. Install and build Zod validation system (MANDATORY)
-cd schema/2025-11-27
-npm install
-npm run build  # Compiles TypeScript validation scripts
-
-# Command reference
-# npm install          # Install dependencies
-# npm run build        # Compile TypeScript
-# npm run test         # Run validation tests
-# npm run clean        # Remove build artifacts
-
-cd ../..
 ```
-
-> **Note**: The system will fail to start without completing the npm setup. Zod validation is mandatory for all data processing.
 
 ---
 
@@ -100,15 +78,12 @@ $MAC_FAIRNESS_WORKSPACE/
 ├── README.md
 ├── pyproject.toml                          # Project dependencies
 │
-├── schema/                                 # Protocol schemas (versioned)
+├── schema/                                 # Protocol schemas (versioned, documentation only)
 │   ├── index.json                          # Schema version registry
 │   └── 2025-11-27/                         # Current protocol version (follows MCP convention)
-│       ├── schemas.ts                      # Zod schema definitions (single source of truth)
-│       ├── validate.ts                     # Runtime validation CLI (called by Python)
-│       ├── test-validation.ts              # Validation test suite
+│       ├── schemas.ts                      # Zod schema definitions (documentation reference)
 │       ├── package.json                    # Node.js dependencies
-│       ├── tsconfig.json                   # TypeScript configuration
-│       └── dist/                           # Compiled JavaScript (after npm run build)
+│       └── tsconfig.json                   # TypeScript configuration
 │
 ├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
 │   ├── index.jsonl                         # Append-only index for production experiments
@@ -137,37 +112,38 @@ $MAC_FAIRNESS_WORKSPACE/
 │
 ├── src/                                    # Source code
 │   ├── agent/                              # Agent implementations
-│   │   ├── base_agent.py
-│   │   ├── ollama_agent.py                 # Ollama agent for local dev (no GPU)
-│   │   ├── vllm_agent.py                   # vLLM agent for production (GPU required)
-│   │   └── model_factory.py                # Smart backend detection
+│   │   ├── base_agent.py                   # Abstract base class with shared functionality
+│   │   ├── async_ollama_agent.py           # Async Ollama agent for local dev (no GPU)
+│   │   ├── async_vllm_agent.py             # Async vLLM agent for production (GPU required)
+│   │   └── model_factory.py                # Smart backend detection and agent creation
 │   │
 │   ├── prompt/                             # Prompt builders
 │   │   ├── base.py                         # Abstract base for all prompt builders
 │   │   └── participant.py                  # Participant role implementation
 │   │
 │   ├── routing/                            # Routing mechanisms
-│   │   └── vanilla_router.py
+│   │   └── vanilla_router.py               # Simple round-based routing with full visibility
 │   │
 │   └── utils/                              # Core utilities
-│       ├── conversation_orchestrator.py    # Main experiment orchestration
+│       ├── conversation_orchestrator.py    # Main experiment orchestration (async entry point)
+│       ├── request_scheduler.py            # GPU-efficient request scheduling
+│       ├── async_conversation_runner.py    # Per-conversation async execution logic
 │       ├── config_manager.py               # Configuration loading and validation
 │       ├── transcript_manager.py           # Transcript building and saving
 │       ├── bookkeeping_manager.py          # Directory and job summary management
-│       ├── zod_validator.py                # Zod schema validation via subprocess
 │       ├── answer_matcher.py               # Flexible answer matching
-│       ├── recording.py                    # Job summary and metrics recording
-│       ├── metrics.py                      # Performance metrics and error aggregation
+│       ├── logging.py                      # Centralized logging, metrics, and error aggregation
 │       └── errors.py                       # Error class hierarchy
 │
 ├── script/                                 # Executable scripts
 │   ├── run_experiment.py                   # Run full experiment (all questions)
-│   ├── submit_slurm.sh                     # Submit to Slurm (creates config snapshot)
-│   ├── query_index.py                      # Query index
+│   ├── cluster/                            # Cluster/Slurm utilities
+│   │   ├── submit_slurm.sh                 # Submit to Slurm (creates config snapshot)
+│   │   ├── vllm_param_sweep.py             # Parameter sweep execution
+│   │   ├── download_models.sh              # Model downloading utilities
+│   │   └── build_flashinfer.sh             # FlashInfer build script
 │   └── formatter/                          # Benchmark data formatter
-│       ├── bbq_formatter.py
-│       ├── diff_aware_formatter.py
-│       └── discrim_eval_formatter.py
+│       └── bbq_formatter.py                # BBQ benchmark formatter
 │
 └── docs/                                   # Documentation
     ├── advanced/                           # Advanced topics (detailed guides)
@@ -181,8 +157,7 @@ $MAC_FAIRNESS_WORKSPACE/
 
 **`src/utils/conversation_orchestrator.py`**: Orchestrates entire experiments and all bookkeeping
 
-- Loads experiment configurations with basic validation
-- Enforces mandatory Zod validation for all data (questions, transcripts)
+- Loads and validates experiment configurations (Python-based validation)
 - Saves immutable config snapshots to `bookkeeping/config_snapshot/{benchmark_subcategory}/`
   - For Slurm: Snapshot saved at queuing time (before job execution)
   - For local: Snapshot saved at start of `run_experiment()` method
@@ -236,8 +211,8 @@ conversation_config:
 
 # Response validation and retry behavior
 retry_config:
-  max_retries: 3
-  answer_match_threshold: 0.85
+  max_retries: 5
+  answer_match_threshold: 0.75
   retry_on_validation_error: true
   retry_on_generation_error: true
 
@@ -247,28 +222,28 @@ identity_reveal_config:
   reveal_demographics: true
   reveal_presence_mode: true
 
-# Model backend configuration
-model_config:
-  shared_model_backbone: llama31_8b
+# Model definitions
+model_definitions:
+  llama31_8b:
+    backend: vllm
+    model_path: meta-llama/Llama-3.1-8B-Instruct
 
-  models:
-    llama31_8b:
-      backend: vllm
-      model_path: meta-llama/Llama-3.1-8B-Instruct
-      vllm_config:
-        tensor_parallel_size: 1
-        gpu_memory_utilization: 0.9
-        max_model_len: 4096
-        dtype: float16
+    vllm_config:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.9
+      max_model_len: 4096
+      dtype: auto
+      max_num_seqs: 256
+      enable_prefix_caching: true
 
-# Agent definitions (same agents for all questions)
+# Agent definitions
 agent_definitions:
   - agent_id: spkr_000
     role: participant
     persona: doctor
     demographics: black
     if_as_human: true
-    model: shared
+    model: llama31_8b
     temperature: 0.7
     max_tokens: 512
 
@@ -277,7 +252,7 @@ agent_definitions:
     persona: doctor
     demographics: white
     if_as_human: true
-    model: shared
+    model: llama31_8b
     temperature: 0.7
     max_tokens: 512
 
@@ -286,7 +261,7 @@ agent_definitions:
     persona: policy_expert
     demographics: null
     if_as_human: true
-    model: shared
+    model: llama31_8b
     temperature: 0.7
     max_tokens: 512
 ```
@@ -332,7 +307,7 @@ Examples:
 
 ### Benchmark Data Preparation
 
-The framework requires questions in a unified JSONL format that conforms to the Zod QuestionSchema.
+The framework requires questions in a unified JSONL format (see `schema/2025-11-27/schemas.ts` for the schema definition).
 
 **Converting benchmarks:**
 
@@ -401,7 +376,7 @@ python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demog
 1. Load and save config snapshot to `bookkeeping/config_snapshot/{benchmark_subcategory}/{experiment_name}_{TIMESTAMP}.yaml`
 2. Load the snapshot (not scratch file) for execution
 3. Read questions from the specified JSONL file
-4. Initialize models once using vLLM (if using shared model backbone)
+4. Initialize models using vLLM async engines
 5. Run each question with the experiment-level agent configurations
 6. Save transcripts to `{MAC_FAIRNESS_EXPERIMENT_ROOT}/{benchmark_subcategory}/{experiment_name}/transcript/{uuid}.json`
 7. Append to `bookkeeping/index.jsonl` with metadata for each transcript
@@ -442,9 +417,8 @@ Each transcript file (one per conversation) contains:
 
 Each job summary (one per job or array task) captures:
 
-- **Execution Metadata**: Job ID, timestamps, duration, config snapshot path, hostname
-- **vLLM Configuration**: Complete vLLM config, model path, GPU device IDs
-- **Hardware & Resource Utilization**: GPU info, peak/average memory usage, KV cache stats
+- **Execution Metadata**: Job ID, timestamps, duration, config snapshot path
+- **vLLM Configuration**: Model definitions and vLLM configs
 - **Throughput & Performance**: Questions/tokens per second, average time per conversation, I/O overhead
 - **Token & Time Statistics**: Total tokens, prompt tokens, wall-clock time, per-agent stats
 - **Processing Statistics**: Success/failure counts, transcript UUIDs, error summary
@@ -457,20 +431,18 @@ The index system uses JSONL for concurrent-safe appends:
 
 - `index.jsonl`: Append-only database (one record per transcript)
 - File locking ensures multiple concurrent jobs can safely append
-- Special case: Dev experiments use separate `dev_ollama_index.jsonl`
+- Special case: Dev experiments use separate index, e.g., `dev_ollama_index.jsonl`
 
 Each index record contains:
 
 - Identifiers (transcript_id, question_id, experiment_name, benchmark_subcategory, job_task_id)
 - Execution context (submission/execution timestamps, protocol_version)
-- Experimental configuration (routing_strategy, identity_reveal_config, shared_model_backbone, n_agents)
+- Experimental configuration (routing_strategy, identity_reveal_config)
 - Full agent configurations for experimental condition filtering
-- Conversation outcomes (status, consensus_reached, total_rounds_completed, retry_attempts)
+- Conversation outcomes (status, consensus_reached, retry_attempts)
 - Paths (transcript_path, config_snapshot_path) using `$MAC_FAIRNESS_WORKSPACE` placeholder
 
 The inclusion of full agent configurations enables high-level analysis directly from the index without loading individual transcripts.
-
-For detailed field descriptions and JSON examples, see [docs/advanced/output-analysis.md](docs/advanced/output-analysis.md).
 
 ---
 
@@ -478,19 +450,20 @@ For detailed field descriptions and JSON examples, see [docs/advanced/output-ana
 
 For detailed information on advanced features and internals, see:
 
+- **[Async Framework Architecture](docs/advanced/async-framework.md)**: Three-pool request scheduling, priority ordering, parallelism model, vLLM continuous batching integration, multi-model support
 - **[Error Handling and Recovery](docs/advanced/error-handling.md)**: Error class hierarchy, recording levels (message/transcript/job-summary), automatic recovery mechanisms, retry logic, graceful degradation
 - **[Prompt Templates](docs/advanced/prompt-templates.md)**: Round-based prompt structure, key design decisions, response processing, answer matching, identity display generation, extending to other roles
 
 **Additional topics covered in advanced docs:**
 
+- Request scheduling with pending, pre-departure, and in-flight pools
+- Dependency-based parallelism within rounds
 - Error class hierarchy and utilities
 - Message-level, transcript-level, and job-summary-level error recording
 - Flexible answer matching with configurable thresholds
 - Identity reveal configuration and display generation
 - Routing mechanisms (vanilla, custom strategies)
-- Shared model backbone for memory efficiency
 - Per-transcript and per-agent performance metrics
-- vLLM configuration and hardware utilization tracking
 
 ---
 

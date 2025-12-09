@@ -101,27 +101,6 @@ class ValidationError(MacFairnessError):
         )
 
 
-class ZodValidationError(ValidationError):
-    """Raised when Zod schema validation fails."""
-
-    def __init__(
-        self,
-        message: str,
-        schema_type: str,
-        validation_errors: Optional[List[Dict]] = None,
-        attempt: Optional[int] = None,
-    ):
-        super().__init__(
-            message=message,
-            attempt=attempt,
-            details={
-                "schema_type": schema_type,
-                "validation_errors": validation_errors or [],
-            },
-        )
-        self.error_code = "ZOD_VALIDATION_FAILED"
-
-
 class MissingStructuredOutputError(ValidationError):
     """Raised when structured output is missing from agent response."""
 
@@ -132,25 +111,6 @@ class MissingStructuredOutputError(ValidationError):
             details={"agent_id": agent_id},
         )
         self.error_code = "MISSING_STRUCTURED_OUTPUT"
-
-
-class JsonDecodeError(ValidationError):
-    """Raised when JSON parsing fails."""
-
-    def __init__(
-        self,
-        message: str,
-        raw_text: str,
-        attempt: Optional[int] = None,
-    ):
-        # Truncate raw_text if too long
-        truncated = raw_text[:500] + "..." if len(raw_text) > 500 else raw_text
-        super().__init__(
-            message=f"Failed to parse JSON: {message}",
-            attempt=attempt,
-            details={"raw_text": truncated},
-        )
-        self.error_code = "JSON_DECODE_FAILED"
 
 
 # Answer Matching Errors
@@ -237,18 +197,6 @@ class AgentError(MacFairnessError):
             error_code="AGENT_ERROR",
             details=details,
         )
-
-
-class AgentGenerationError(AgentError):
-    """Raised when agent fails to generate a response."""
-
-    def __init__(self, agent_id: str, original_error: str):
-        super().__init__(
-            message=f"Agent {agent_id} failed to generate response: {original_error}",
-            agent_id=agent_id,
-            details={"original_error": original_error},
-        )
-        self.error_code = "AGENT_GENERATION_FAILED"
 
 
 class MaxRetriesExceededError(AgentError):

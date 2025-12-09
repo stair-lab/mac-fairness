@@ -5,7 +5,7 @@
 #
 # Prerequisites:
 #   - CUDA_HOME must be set to the CUDA installation directory
-#   - LFS_HOME must be set to your LFS home directory
+#   - LFS_HOME must be set to the Local File System HOME directory (e.g., could be $HOME)
 #   - nvcc must be in PATH
 #
 # Usage:
@@ -20,13 +20,13 @@ echo "========================================"
 # Verify required environment variables
 if [ -z "$LFS_HOME" ]; then
     echo "ERROR: LFS_HOME environment variable not set"
-    echo "Please set it to your LFS home directory"
+    echo "Please set it to the LFS home directory"
     exit 1
 fi
 
 if [ -z "$CUDA_HOME" ]; then
     echo "ERROR: CUDA_HOME environment variable not set"
-    echo "Please set it to your CUDA installation directory"
+    echo "Please set it to the CUDA installation directory"
     echo "Example: export CUDA_HOME=/usr/local/cuda-12.4"
     exit 1
 fi
@@ -101,8 +101,9 @@ cd flashinfer
 
 echo ""
 echo "Step 6: Checkout latest stable version"
-# Get latest tag
+# -- Get latest tag
 # LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.5.3")
+# -- Set latest tag
 LATEST_TAG="v0.5.3"
 echo "  Using version: $LATEST_TAG"
 git checkout "$LATEST_TAG"

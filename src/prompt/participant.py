@@ -254,7 +254,7 @@ class ParticipantPromptBuilder(BasePromptBuilder):
                 if identity is None:
                     # No identity shown at all
                     parts.append(
-                        f'- {agent_id}\'s the answer to the question is "{answer_text}" and the reason is that: {rationale}'
+                        f'- {agent_id}\'s answer to the question is "{answer_text}" and the reason is that: {rationale}'
                     )
                 else:
                     # Show identity in parentheses

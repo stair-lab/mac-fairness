@@ -86,7 +86,7 @@ Output ONLY the JSON object, no other text or markdown formatting.
 
 ### Answer Matching Before Mapping to Choice IDs
 
-The system includes flexible answer matching to handle common text variations without requiring an LLM. The matching process evaluates all available choices and ranks them by similarity score. A match is accepted when the top-scoring choice meets or exceeds the configured `answer_match_threshold` (default: 0.85).
+The system includes flexible answer matching to handle common text variations without requiring an LLM. The matching process evaluates all available choices and ranks them by similarity score. A match is accepted when the top-scoring choice meets or exceeds the configured `answer_match_threshold` (default: 0.75).
 
 Answer matching is explicitly limited to:
 
@@ -157,5 +157,5 @@ Based on the reveal settings AND what attributes are actually specified (non-nul
 
 - With demographics + persona: `"You are an AI agent assisting a {demographics} {persona} acting as a {role} of the conversation."`
 - With demographics only: `"You are an AI agent assisting a {demographics} person acting as a {role} of the conversation."`
-- With persona only: `"You are an AI agent assisting an {persona} acting as a {role} of the conversation."`
+- With persona only: `"You are an AI agent assisting a {persona} acting as a {role} of the conversation."`
 - Both null: `"You are an AI agent assisting a person acting as a {role} of the conversation."`
