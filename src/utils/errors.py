@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 def _get_error_message(error_code: str) -> str:
     """Get user-friendly message for an error code."""
     # Lazy import to avoid circular dependency
-    from src.utils.recording import ERROR_CODE_MESSAGES
+    from src.utils.logging import ERROR_CODE_MESSAGES
 
     return ERROR_CODE_MESSAGES.get(error_code, error_code.replace("_", " ").title())
 
@@ -349,6 +349,154 @@ class DependencyError(MacFairnessError):
             message=f"Dependency error for {dependency}: {message}",
             error_code="DEPENDENCY_ERROR",
             details={"dependency": dependency},
+        )
+
+
+# vLLM Engine Errors
+class VLLMEngineError(MacFairnessError):
+    """Base class for vLLM engine errors."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "VLLM_ENGINE_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message=message, error_code=error_code, details=details)
+
+
+class VLLMEngineNotStartedError(VLLMEngineError):
+    """Raised when attempting to use engine before starting."""
+
+    def __init__(self):
+        super().__init__(
+            message="BatchedVLLMEngine not started. Call start() first.",
+            error_code="VLLM_ENGINE_NOT_STARTED",
+        )
+
+
+class VLLMEngineNotInitializedError(VLLMEngineError):
+    """Raised when engine is not initialized."""
+
+    def __init__(self):
+        super().__init__(
+            message="BatchedVLLMEngine not initialized. Create an AsyncVLLMAgent first.",
+            error_code="VLLM_ENGINE_NOT_INITIALIZED",
+        )
+
+
+class VLLMBatchError(VLLMEngineError):
+    """Raised when a batch processing fails."""
+
+    def __init__(
+        self,
+        message: str,
+        batch_size: int,
+        request_ids: List[str],
+        original_error: Optional[Exception] = None,
+    ):
+        details = {
+            "batch_size": batch_size,
+            "request_ids": request_ids,
+        }
+        if original_error:
+            details["original_error"] = str(original_error)
+            details["original_error_type"] = type(original_error).__name__
+        super().__init__(
+            message=message,
+            error_code="VLLM_BATCH_ERROR",
+            details=details,
+        )
+
+
+class VLLMInferenceError(VLLMEngineError):
+    """Raised when vLLM inference fails for a single request."""
+
+    def __init__(
+        self,
+        message: str,
+        request_id: Optional[str] = None,
+        original_error: Optional[Exception] = None,
+    ):
+        details = {}
+        if request_id:
+            details["request_id"] = request_id
+        if original_error:
+            details["original_error"] = str(original_error)
+            details["original_error_type"] = type(original_error).__name__
+        super().__init__(
+            message=message,
+            error_code="VLLM_INFERENCE_ERROR",
+            details=details,
+        )
+
+
+class VLLMOOMError(VLLMEngineError):
+    """Raised when vLLM runs out of GPU memory."""
+
+    def __init__(self, max_tokens: int, batch_size: int):
+        super().__init__(
+            message=f"GPU OOM during inference. max_tokens={max_tokens}, batch_size={batch_size}",
+            error_code="VLLM_OOM_ERROR",
+            details={"max_tokens": max_tokens, "batch_size": batch_size},
+        )
+
+
+# Ollama Errors
+class OllamaError(MacFairnessError):
+    """Base class for Ollama-related errors."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "OLLAMA_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message=message, error_code=error_code, details=details)
+
+
+class OllamaAPIError(OllamaError):
+    """Raised when Ollama API request fails."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        response_text: Optional[str] = None,
+    ):
+        details = {}
+        if status_code is not None:
+            details["status_code"] = status_code
+        if response_text is not None:
+            details["response_text"] = response_text[:500]  # Truncate long responses
+        super().__init__(
+            message=message,
+            error_code="OLLAMA_API_ERROR",
+            details=details if details else None,
+        )
+
+
+class OllamaConnectionError(OllamaError):
+    """Raised when connection to Ollama fails."""
+
+    def __init__(self, message: str, original_error: Optional[Exception] = None):
+        details = {}
+        if original_error is not None:
+            details["original_error"] = str(original_error)
+        super().__init__(
+            message=message,
+            error_code="OLLAMA_CONNECTION_ERROR",
+            details=details if details else None,
+        )
+
+
+class OllamaNotAvailableError(OllamaError):
+    """Raised when Ollama is not installed or not running."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            error_code="OLLAMA_NOT_AVAILABLE",
         )
 
 

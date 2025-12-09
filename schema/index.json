@@ -7,14 +7,11 @@
         "release_date": "2025-11-27",
         "description": "Initial protocol version with unified question format and multi-agent conversation schemas",
         "implementation": {
-          "schemas": "2025-11-27/schemas.ts",
-          "validator": "2025-11-27/validate.ts",
-          "test": "2025-11-27/test-validation.ts",
-          "json_schema_generator": "2025-11-27/generate-json-schemas.ts"
+          "schemas": "2025-11-27/schemas.ts"
         },
         "validation": {
-          "source_of_truth": "Zod schemas in schemas.ts",
-          "runtime_validation": "validate.ts CLI called by Python via subprocess"
+          "runtime": "Python-based validation in async_conversation_runner.py",
+          "documentation": "TypeScript schemas serve as documentation and reference"
         },
         "breaking_changes": [],
         "notes": [
@@ -22,9 +19,8 @@
           "Flexible agent configuration with role, persona, demographics, and if_as_human attributes",
           "Round-based conversation structure with configurable routing strategies",
           "Comprehensive metadata tracking for reproducibility",
-          "Zod schemas (schemas.ts) as single source of truth for validation",
-          "TypeScript types automatically inferred from Zod schemas",
-          "Runtime validation via validate.ts CLI (called by Python)"
+          "TypeScript schemas (schemas.ts) serve as documentation reference",
+          "Runtime validation performed in Python for performance"
         ]
       }
     ]
@@ -34,6 +30,6 @@
     "naming_convention": "Schema directories follow MCP convention (YYYY-MM-DD)",
     "versioning_policy": "New versions are created when schemas have breaking changes or significant additions",
     "backward_compatibility": "Older transcripts remain valid and parseable with their specified protocol_version",
-    "validation_workflow": "Python → subprocess → validate.ts → schemas.ts (Zod) → validation result"
+    "validation": "Runtime validation is performed in Python. TypeScript schemas serve as documentation."
   }
 }

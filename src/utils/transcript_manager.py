@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from src.utils.errors import ProjectRootError
-from src.utils.recording import (
+from src.utils.logging import (
     aggregate_validation_errors,
     display_path,
     format_timestamp,
@@ -45,9 +45,7 @@ class TranscriptManager:
         snapshot_path: str,
         submission_timestamp: datetime,
         execution_timestamp: datetime,
-        total_tokens_generated: int,
-        total_prompt_tokens: int,
-        total_time_ms: float,
+        token_stats: Dict[str, Any],
         all_validation_errors: List[Dict[str, Any]],
         status: str = "succeeded",
         error_info: Optional[Dict[str, Any]] = None,
@@ -62,9 +60,11 @@ class TranscriptManager:
             snapshot_path: Path to config snapshot
             submission_timestamp: When the experiment was submitted
             execution_timestamp: When this conversation was executed
-            total_tokens_generated: Total tokens generated
-            total_prompt_tokens: Total prompt tokens used
-            total_time_ms: Total generation time in milliseconds
+            token_stats: Token statistics dictionary with:
+                - total_messages: Number of messages
+                - prompt_tokens: {total, avg, max}
+                - response_tokens: {total, avg, max}
+                - combined_tokens: {total, avg, max}
             all_validation_errors: All validation errors encountered
             status: Conversation status (success/failed/error)
             error_info: Optional error information for failed conversations
@@ -73,14 +73,13 @@ class TranscriptManager:
             Complete transcript dictionary
         """
         exp_meta = config["experiment_metadata"]
-        conv_config = config["conversation_config"]
+        conversation_config = config["conversation_config"]
         retry_config = config.get("retry_config", {})
         identity_config = config["identity_reveal_config"]
         agent_defs = config["agent_definitions"]
         schema_version = exp_meta.get("schema_version", "2025-11-27")
 
-        # Calculate summary metrics
-        total_messages = sum(len(r["messages"]) for r in conversation_rounds)
+        # Summary metrics
         total_rounds = len(conversation_rounds)
 
         # Extract final answers if available
@@ -140,41 +139,26 @@ class TranscriptManager:
                 "job_task_id": job_task_id,
             },
             "question": question,
-            "routing_config": {
-                "strategy": conv_config["routing_strategy"],
-                "max_rounds": conv_config["max_rounds"],
+            "conversation_config": {
+                "routing_strategy": conversation_config["routing_strategy"],
+                "max_rounds": conversation_config["max_rounds"],
             },
             "retry_config": {
-                "max_retries": retry_config.get("max_retries", 3),
-                "answer_match_threshold": retry_config.get(
-                    "answer_match_threshold", 0.85
-                ),
-                "retry_on_validation_error": retry_config.get(
-                    "retry_on_validation_error", True
-                ),
-                "retry_on_generation_error": retry_config.get(
-                    "retry_on_generation_error", True
-                ),
+                "max_retries": retry_config["max_retries"],
+                "answer_match_threshold": retry_config["answer_match_threshold"],
+                "retry_on_validation_error": retry_config["retry_on_validation_error"],
+                "retry_on_generation_error": retry_config["retry_on_generation_error"],
             },
             "identity_reveal_config": identity_config,
-            "agents": agent_defs,
+            "agent_definitions": agent_defs,
             "conversation_rounds": conversation_rounds,
             "conversation_summary": {
                 "total_rounds": total_rounds,
-                "total_messages": total_messages,
+                "total_messages": token_stats.get("total_messages", 0),
                 "status": status,
                 "final_answers": final_answers,
                 "consensus_reached": consensus_reached,
-                "performance_metrics": {
-                    "total_tokens": total_tokens_generated,
-                    "total_prompt_tokens": total_prompt_tokens,
-                    "total_time_seconds": round(total_time_ms / 1000, 3)
-                    if total_time_ms
-                    else 0,
-                    "average_response_time_ms": round(total_time_ms / total_messages, 3)
-                    if total_messages
-                    else 0,
-                },
+                "token_metrics": token_stats,
                 "retry_statistics": {
                     "total_retry_attempts": total_retry_attempts,
                     "messages_requiring_retries": messages_requiring_retries,
@@ -221,7 +205,11 @@ class TranscriptManager:
         with open(transcript_path, "w") as f:
             json.dump(transcript, f, indent=2)
 
-        print(f"✓ Transcript saved: {display_path(transcript_path, self.project_root)}")
+        # Only print if live status display is not enabled
+        if not os.environ.get("MAC_FAIRNESS_LIVE_STATUS"):
+            print(
+                f"✓ Transcript saved: {display_path(transcript_path, self.project_root)}"
+            )
         return str(transcript_path)
 
     def append_to_index(
@@ -243,10 +231,8 @@ class TranscriptManager:
         # All are in bookkeeping/ directory
         if benchmark == "dev_ollama":
             index_path = self.project_root / "bookkeeping" / "dev_ollama_index.jsonl"
-        elif benchmark == "dev_snap":
-            index_path = self.project_root / "bookkeeping" / "dev_snap_index.jsonl"
-        elif benchmark == "dev_sherlock":
-            index_path = self.project_root / "bookkeeping" / "dev_sherlock_index.jsonl"
+        elif benchmark == "dev_vllm":
+            index_path = self.project_root / "bookkeeping" / "dev_vllm_index.jsonl"
         else:
             index_path = self.project_root / "bookkeeping" / "index.jsonl"
 
@@ -256,7 +242,7 @@ class TranscriptManager:
 
         # Build index entry
         exp_meta = config["experiment_metadata"]
-        conv_config = config["conversation_config"]
+        conversation_config = config["conversation_config"]
         identity_config = config["identity_reveal_config"]
         agent_defs = config["agent_definitions"]
         summary = transcript["conversation_summary"]
@@ -297,13 +283,10 @@ class TranscriptManager:
             "transcript_path": transcript_display,
             "config_snapshot_path": config_snapshot_display,
             "protocol_version": "2025-11-27",
-            "routing_strategy": conv_config["routing_strategy"],
+            "routing_strategy": conversation_config["routing_strategy"],
             "identity_reveal_config": identity_config,
             "n_agents": len(agent_defs),
-            "shared_model_backbone": config["model_config"].get(
-                "shared_model_backbone"
-            ),
-            "agents": agent_defs,
+            "agent_definitions": agent_defs,
             "status": summary["status"],
             "consensus_reached": summary["consensus_reached"],
             "total_rounds_completed": summary["total_rounds"],

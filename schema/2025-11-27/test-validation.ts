@@ -100,11 +100,10 @@ const testCases = {
     },
     visible_to: ["spkr_001", "spkr_002", "spkr_003"],  // Optional: routing visibility
     message_metadata: {
-      tokens_generated: 42,
-      generation_time_ms: 1250.5,
-      temperature_used: 0.7,
-      exceeded_max_tokens: false,
-      retry_count: 0
+      retry_count: 0,
+      prompt_tokens: 150,
+      response_tokens: 42,
+      matched_answer_text: "Option A"
     }
   },
 
@@ -122,14 +121,10 @@ const testCases = {
     reveal_presence_mode: true
   },
 
-  // Valid routing config
-  routingValid: {
-    strategy: "round_robin",
-    max_rounds: 5,
-    parameters: {
-      allow_repeats: false,
-      consensus_threshold: 0.8
-    }
+  // Valid conversation config
+  conversationConfigValid: {
+    routing_strategy: "vanilla",
+    max_rounds: 3
   },
 
   // Valid question - multiple choice with capital letters
@@ -230,13 +225,13 @@ if (!identityRevealInvalid.success) {
   console.log(`   Error: ${identityRevealInvalid.error.errors[0].message} at path: ${identityRevealInvalid.error.errors[0].path.join('.')}`);
 }
 
-// Test routing validation
-console.log('\n5. Testing Routing Schema:');
-const routingValid = schemas.routing.safeParse(testCases.routingValid);
-console.log(`   ✓ Valid: ${routingValid.success}`);
-if (!routingValid.success) {
+// Test conversation config validation
+console.log('\n5. Testing Conversation Config Schema:');
+const conversationConfigValid = schemas.conversationConfig.safeParse(testCases.conversationConfigValid);
+console.log(`   ✓ Valid: ${conversationConfigValid.success}`);
+if (!conversationConfigValid.success) {
   console.log('   Errors:');
-  routingValid.error.errors.forEach(err => {
+  conversationConfigValid.error.errors.forEach((err: { path: (string | number)[]; message: string }) => {
     console.log(`     - ${err.path.join('.')}: ${err.message}`);
   });
 }

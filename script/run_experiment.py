@@ -21,7 +21,7 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple
 
 import yaml
 
@@ -29,24 +29,11 @@ import yaml
 project_root = Path(os.environ["MAC_FAIRNESS_WORKSPACE"])
 sys.path.insert(0, str(project_root))
 
+from src.utils import debug_print, is_debug_enabled
 from src.utils.conversation_orchestrator import ConversationOrchestrator
-
-# Debug flag
-DEBUG = os.environ.get("MAC_FAIRNESS_DEBUG_FLAG")
 
 # Track if we've been asked to stop
 _shutdown_requested = False
-
-
-def _debug_print(msg: str) -> None:
-    """Print debug message if debug flag is set."""
-    if DEBUG:
-        print(f"[DEBUG] {msg}")
-
-
-def _info_print(msg: str) -> None:
-    """Print info message (always shown)."""
-    print(msg)
 
 
 def parse_range(range_str: str) -> Tuple[int, int]:
@@ -104,7 +91,7 @@ def validate_config(config_path: Path) -> dict:
         raise ValueError("Config file is empty")
 
     # Validate required top-level keys
-    required_keys = ["experiment_metadata", "model_config", "agent_definitions"]
+    required_keys = ["experiment_metadata", "model_definitions", "agent_definitions"]
     missing = [k for k in required_keys if k not in config]
     if missing:
         raise ValueError(f"Config missing required keys: {missing}")
@@ -124,60 +111,60 @@ def get_schema_version(config: dict) -> str:
     return config.get("experiment_metadata", {}).get("schema_version", "unknown")
 
 
-def get_backend_type(config: dict) -> Optional[str]:
-    """Detect which backend the config uses.
+def get_backend_type(config: dict) -> str:
+    """Get backend type from config.
 
     Args:
         config: Parsed config dictionary
 
     Returns:
-        "vllm", "ollama", or None if unknown
+        "vllm" or "ollama"
+
+    Raises:
+        ValueError: If backend not specified in any model definition
     """
-    models = config.get("model_config", {}).get("models", {})
-    for model_def in models.values():
+    model_definitions = config.get("model_definitions", {})
+    for model_def in model_definitions.values():
         backend = model_def.get("backend")
         if backend:
             return backend
-        # Auto-detect from config patterns
-        if "vllm_config" in model_def or "model_path" in model_def:
-            return "vllm"
-        if "ollama_config" in model_def or "model_name" in model_def:
-            return "ollama"
-    return None
+    raise ValueError(
+        "backend must be specified in model_definitions (either 'vllm' or 'ollama')"
+    )
 
 
-def cleanup_resources(backend: Optional[str]) -> None:
+def cleanup_resources(backend: str) -> None:
     """Clean up GPU/model resources based on backend type.
 
     Args:
-        backend: Backend type ("vllm", "ollama", or None)
+        backend: Backend type ("vllm" or "ollama")
     """
     if backend == "vllm":
         try:
-            from src.agent.vllm_agent import VLLMAgent
+            from src.agent.async_vllm_agent import AsyncVLLMAgent
 
-            VLLMAgent.cleanup_all_models()
+            AsyncVLLMAgent.cleanup_all()
         except Exception as e:
-            _debug_print(f"vLLM cleanup error (non-fatal): {e}")
+            debug_print(f"vLLM cleanup error (non-fatal): {e}")
     # Ollama doesn't need cleanup (external process)
 
 
-def signal_handler(signum: int, frame) -> None:
+def signal_handler(signum: int, _frame) -> None:
     """Handle shutdown signals gracefully.
 
     Args:
         signum: Signal number
-        frame: Current stack frame
+        _frame: Current stack frame (unused)
     """
     global _shutdown_requested
     sig_name = signal.Signals(signum).name
     if _shutdown_requested:
-        _info_print(f"\n\n✗ Forced shutdown ({sig_name})")
+        print(f"\n\n✗ Forced shutdown ({sig_name})")
         sys.exit(128 + signum)
     else:
         _shutdown_requested = True
-        _info_print(f"\n\n✗ Received {sig_name}, finishing current question...")
-        _info_print("  (Press Ctrl+C again to force quit)")
+        print(f"\n\n✗ Received {sig_name}, finishing current question...")
+        print("  (Press Ctrl+C again to force quit)")
 
 
 def main() -> int:
@@ -239,49 +226,51 @@ Environment Variables:
         question_range = None
         if args.range:
             question_range = parse_range(args.range)
-            _info_print(
+            print(
                 f"✓ Processing question range: {question_range[0]}-{question_range[1]}"
             )
 
         # Print header
-        _info_print("=" * 60)
-        _info_print("Multi-Agent Conversation Framework")
-        _info_print(f"Protocol Version: {schema_version}")
-        _info_print("=" * 60)
-        _info_print(f"\n✓ Config: {args.config}")
-        _info_print(f"✓ Experiment: {exp_name}")
-        _info_print(f"✓ Backend: {backend or 'auto-detect'}\n")
+        print("=" * 60)
+        print("Multi-Agent Conversation Framework")
+        print(f"Protocol Version: {schema_version}")
+        print("=" * 60)
+        print(f"\n✓ Config: {args.config}")
+        print(f"✓ Experiment: {exp_name}")
+        print(f"✓ Backend: {backend}\n")
 
-        _debug_print("Debug mode enabled")
-        _debug_print(
+        debug_print("Debug mode enabled")
+        debug_print(
             f"Experiment root: {os.environ.get('MAC_FAIRNESS_EXPERIMENT_ROOT', 'experiment')}"
         )
 
-        # Run experiment
-        orchestrator = ConversationOrchestrator(str(config_path))
-        orchestrator.run_experiment(question_range=question_range)
+        # Run experiment (async)
+        import asyncio
 
-        _info_print("\n" + "=" * 60)
-        _info_print("✓ Experiment completed successfully!")
-        _info_print("=" * 60)
+        orchestrator = ConversationOrchestrator(str(config_path))
+        asyncio.run(orchestrator.run_experiment(question_range=question_range))
+
+        print("\n" + "=" * 60)
+        print("✓ Experiment completed successfully!")
+        print("=" * 60)
         return 0
 
     except FileNotFoundError as e:
-        _info_print(f"\n✗ Error: {e}")
+        print(f"\n✗ Error: {e}")
         return 1
 
     except ValueError as e:
-        _info_print(f"\n✗ Configuration error: {e}")
+        print(f"\n✗ Configuration error: {e}")
         return 1
 
     except KeyboardInterrupt:
-        _info_print("\n\n✗ Experiment interrupted by user")
+        print("\n\n✗ Experiment interrupted by user")
         return 130
 
     except Exception as e:
-        _info_print("\n\n✗ Experiment failed with error:")
-        _info_print(f"  {type(e).__name__}: {e}")
-        if DEBUG:
+        print("\n\n✗ Experiment failed with error:")
+        print(f"  {type(e).__name__}: {e}")
+        if is_debug_enabled():
             import traceback
 
             traceback.print_exc()
@@ -289,7 +278,7 @@ Environment Variables:
 
     finally:
         # Always cleanup resources
-        _info_print("\n✓ Cleaning up resources...")
+        print("\n✓ Cleaning up resources...")
         cleanup_resources(backend)
 
 

@@ -12,8 +12,7 @@ A lightweight, Slurm-compatible framework for running multi-agent conversations 
 - [4. Configuration](#4-configuration)
 - [5. Running Experiments](#5-running-experiments)
 - [6. Output Structure](#6-output-structure)
-- [7. Schema Versioning](#7-schema-versioning)
-- [8. Advanced Topics](#8-advanced-topics)
+- [7. Advanced Topics](#7-advanced-topics)
 - [Citation](#citation)
 - [License](#license)
 
@@ -105,7 +104,6 @@ $MAC_FAIRNESS_WORKSPACE/
 │   ├── index.json                          # Schema version registry
 │   └── 2025-11-27/                         # Current protocol version (follows MCP convention)
 │       ├── schemas.ts                      # Zod schema definitions (single source of truth)
-│       ├── generate-json-schemas.ts        # Optional: Generate JSON schemas from Zod
 │       ├── validate.ts                     # Runtime validation CLI (called by Python)
 │       ├── test-validation.ts              # Validation test suite
 │       ├── package.json                    # Node.js dependencies
@@ -174,8 +172,7 @@ $MAC_FAIRNESS_WORKSPACE/
 └── docs/                                   # Documentation
     ├── advanced/                           # Advanced topics (detailed guides)
     │   ├── error-handling.md               # Error handling and recovery mechanisms
-    │   ├── prompt-templates.md             # Prompt engineering and template design
-    │   └── output-analysis.md              # Detailed output structure and analysis
+    │   └── prompt-templates.md             # Prompt engineering and template design
     └── guide/
         └── dev_ollama_walkthrough.ipynb    # Local development testing with Ollama (no GPU required)
 ```
@@ -256,7 +253,6 @@ model_config:
 
   models:
     llama31_8b:
-      family: llama
       backend: vllm
       model_path: meta-llama/Llama-3.1-8B-Instruct
       vllm_config:
@@ -478,57 +474,12 @@ For detailed field descriptions and JSON examples, see [docs/advanced/output-ana
 
 ---
 
-## 7. Schema Versioning
-
-### Current Version: `2025-11-27`
-
-The schema version is the single source of truth for the entire framework. All components reference this version:
-
-- Questions include `"schema_version": "2025-11-27"`
-- Transcripts include `"protocol_version": "2025-11-27"`
-- Python package version: `2025.11.27` (PEP 440 format)
-- TypeScript constant: `SCHEMA_VERSION = '2025-11-27'`
-
-All transcripts include a `protocol_version` field. When schemas evolve:
-
-1. Create new version directory: `schema/YYYY-MM-DD/` (follows MCP convention)
-2. Update `schema/index.json`
-3. Old transcripts remain parseable
-
-### Schema Documentation and Validation
-
-The framework uses Zod for runtime validation of all data structures. Validation is mandatory and ensures data integrity throughout the pipeline.
-
-**Validation pipeline:**
-
-1. Define Zod schemas in `schema/2025-11-27/schemas.ts` (single source of truth)
-2. Runtime validation via `schema/2025-11-27/validate.ts` (CLI called by Python)
-3. Optional: Generate JSON schemas for documentation using `generate-json-schemas.ts`
-
-**TypeScript schema files:**
-
-- `schemas.ts`: Zod schema definitions with comprehensive inline documentation
-- `validate.ts`: Runtime validation CLI (primary interface for Python)
-- `test-validation.ts`: Comprehensive test suite for all schemas
-- `generate-json-schemas.ts`: Optional JSON schema generator for documentation
-
-The framework:
-
-1. Requests structured JSON from agents
-2. Validates against the appropriate response type schema
-3. Retries on validation failure (with configurable limits)
-4. Records validation errors in message metadata
-5. Aggregates retry statistics in conversation summary
-
----
-
-## 8. Advanced Topics
+## 7. Advanced Topics
 
 For detailed information on advanced features and internals, see:
 
 - **[Error Handling and Recovery](docs/advanced/error-handling.md)**: Error class hierarchy, recording levels (message/transcript/job-summary), automatic recovery mechanisms, retry logic, graceful degradation
 - **[Prompt Templates](docs/advanced/prompt-templates.md)**: Round-based prompt structure, key design decisions, response processing, answer matching, identity display generation, extending to other roles
-- **[Output Analysis](docs/advanced/output-analysis.md)**: Detailed transcript structure with JSON examples, job summary structure, index system design philosophy, querying patterns
 
 **Additional topics covered in advanced docs:**
 

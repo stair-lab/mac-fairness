@@ -57,13 +57,13 @@
 import { schemas } from './schemas.js';
 import * as readline from 'readline';
 
-// Map of schema names to validators (order matches generate-json-schemas.ts)
+// Map of schema names to validators
 const validators = {
   'question': schemas.question,
   'agent': schemas.agent,
   'structured_output': schemas.structuredOutput,
   'message': schemas.message,
-  'routing': schemas.routing,
+  'conversation_config': schemas.conversationConfig,
   'conversation': schemas.conversation,
   'metadata': schemas.metadata
 } as const;

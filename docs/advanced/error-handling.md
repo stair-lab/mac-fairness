@@ -117,7 +117,7 @@ Each message in the conversation contains detailed error information:
           "tokens_generated": 41,
           "tokens_prompt": 369
         }
-      },
+      }
     ]
   }
 }
@@ -145,7 +145,7 @@ Aggregated error statistics for the entire conversation. The `status` field indi
     "consensus_reached": false,
     "performance_metrics": {
       "total_tokens": 558,
-      "total_prompt_tokens": 4269,
+      "total_tokens_prompt": 4269,
       "total_time_seconds": 12.146,
       "average_response_time_ms": 1349.527
     },
@@ -159,7 +159,7 @@ Aggregated error statistics for the entire conversation. The `status` field indi
         }
       ]
     }
-  },
+  }
 }
 ```
 
@@ -191,7 +191,7 @@ High-level statistics across all questions in an experiment:
       "by_type": {},
       "error_detail": []
     }
-  },
+  }
 }
 ```
 
@@ -246,8 +246,8 @@ Control error behavior via `retry_config` in your experiment configuration:
 
 ```yaml
 retry_config:
-  max_retries: 3                    # Maximum retry attempts per agent response
-  answer_match_threshold: 0.85      # Similarity threshold for answer matching
-  retry_on_validation_error: true   # Retry when response format is invalid
-  retry_on_generation_error: true   # Retry when generation fails
+  max_retries: 3 # Maximum retry attempts per agent response
+  answer_match_threshold: 0.85 # Similarity threshold for answer matching
+  retry_on_validation_error: true # Retry when response format is invalid
+  retry_on_generation_error: true # Retry when generation fails
 ```

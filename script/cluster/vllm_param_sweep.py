@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-"""Unified vLLM parameter sweep tool for finding optimal configuration.
+"""vLLM parameter sweep tool for benchmarking configuration options.
 
-This script helps discover optimal vLLM parameters (max_num_seqs, gpu_memory_utilization,
-max_model_len) through systematic testing. It is GPU-agnostic and model-agnostic.
-
-The tool dynamically generates configs based on:
-1. A base config template
-2. Parameter ranges to sweep
-3. Detected GPU capabilities
+Sweeps vLLM parameters (max_num_seqs, gpu_memory_utilization, max_model_len) to
+find optimal settings. Questions per run = 2x max(max_num_seqs), capped by dataset size.
 
 Usage:
-    # Quick validation test (10 questions, single config)
-    python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml --quick-test
 
-    # Sweep max_num_seqs with detected GPU (default: 512 questions per config)
-    python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \\
-        --sweep max_num_seqs --values 8 16 32 64
+    # Sweep with  max_num_seqs and gpu_memory_utilization
+    python script/cluster/vllm_param_sweep.py --config config/dev_vllm/param_sweep.yaml \
+        --max-num-seqs 256 512 --gpu-memory-util 0.85 0.95
 
-    # Sweep multiple parameters
-    python script/cluster/vllm_param_sweep.py --config config/dev_snap/base_sweep.yaml \\
-        --sweep max_num_seqs gpu_memory_utilization \\
-        --max-num-seqs 8 16 32 \\
-        --gpu-memory-util 0.85 0.9
+    # Clean previous data before sweep
+    python script/cluster/vllm_param_sweep.py --clean --config config/dev_vllm/param_sweep.yaml \
+        --max-num-seqs 256 512 --gpu-memory-util 0.9
 
-    # Generate report from previous runs
-    python script/cluster/vllm_param_sweep.py --report-only --benchmark dev_snap
+    # Clean only (no sweep)
+    python script/cluster/vllm_param_sweep.py --clean --benchmark dev_vllm
+
+    # Dry run to see what would be tested
+    python script/cluster/vllm_param_sweep.py --config config/dev_vllm/param_sweep.yaml \
+        --max-num-seqs 256 512 1024 --dry-run
+
+    # Add live status or debug flag
+    MAC_FAIRNESS_LIVE_STATUS=1 python ...
 
 Environment Variables:
     MAC_FAIRNESS_WORKSPACE - Project root directory (required)
     MAC_FAIRNESS_DEBUG_FLAG - Enable debug output
+    MAC_FAIRNESS_LIVE_STATUS - Enable live status display
     MAC_FAIRNESS_EXPERIMENT_ROOT - Override experiment output directory
 """
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,19 +49,39 @@ import yaml
 project_root = Path(os.environ["MAC_FAIRNESS_WORKSPACE"])
 sys.path.insert(0, str(project_root))
 
-# Debug flag
-DEBUG = os.environ.get("MAC_FAIRNESS_DEBUG_FLAG")
+from src.utils import debug_print, is_debug_enabled, is_live_status_enabled
 
 
-def _debug_print(msg: str) -> None:
-    """Print debug message if debug flag is set."""
-    if DEBUG:
-        print(f"[DEBUG] {msg}")
+def clean_benchmark_data(benchmark: str) -> None:
+    """Clear previous experiment data for the specified benchmark.
 
+    Clears:
+    - bookkeeping/config_snapshot/<benchmark>/*
+    - $MAC_FAIRNESS_EXPERIMENT_ROOT/<benchmark>/*
 
-def _info_print(msg: str) -> None:
-    """Print info message (always shown)."""
-    print(msg)
+    Args:
+        benchmark: Benchmark subcategory (e.g., 'dev_vllm')
+    """
+    # Clear config snapshots
+    config_snapshot_dir = project_root / "bookkeeping" / "config_snapshot" / benchmark
+    if config_snapshot_dir.exists():
+        print(f"Clearing config snapshots: {config_snapshot_dir}")
+        shutil.rmtree(config_snapshot_dir)
+        config_snapshot_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  ✓ Cleared {config_snapshot_dir.name}/")
+
+    # Clear experiment results
+    exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+    exp_root_path = Path(exp_root)
+    if not exp_root_path.is_absolute():
+        exp_root_path = project_root / exp_root
+    experiment_dir = exp_root_path / benchmark
+
+    if experiment_dir.exists():
+        print(f"Clearing experiment data: {experiment_dir}")
+        shutil.rmtree(experiment_dir)
+        experiment_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  ✓ Cleared {experiment_dir.name}/")
 
 
 def get_gpu_info() -> Optional[Dict[str, Any]]:
@@ -109,65 +129,8 @@ def get_gpu_info() -> Optional[Dict[str, Any]]:
             "count": gpu_count,
         }
     except Exception as e:
-        _debug_print(f"GPU detection failed: {e}")
+        debug_print(f"GPU detection failed: {e}")
         return None
-
-
-def suggest_param_ranges(gpu_info: Optional[Dict[str, Any]]) -> Dict[str, List[Any]]:
-    """Suggest parameter ranges based on GPU capabilities.
-
-    Args:
-        gpu_info: GPU information dict from get_gpu_info()
-
-    Returns:
-        Dictionary of suggested parameter ranges
-    """
-    if not gpu_info:
-        # Conservative defaults for unknown GPU
-        return {
-            "max_num_seqs": [4, 8, 16],
-            "gpu_memory_utilization": [0.85],
-            "max_model_len": [4096],
-        }
-
-    memory_gb = gpu_info["memory_gb"]
-
-    # Suggest ranges based on GPU memory
-    if memory_gb >= 160:  # H200, B200 class
-        return {
-            "max_num_seqs": [32, 64, 128],
-            "gpu_memory_utilization": [0.9],
-            "max_model_len": [8192],
-        }
-    elif memory_gb >= 80:  # H100, A100-80GB class
-        return {
-            "max_num_seqs": [16, 32, 64],
-            "gpu_memory_utilization": [0.9],
-            "max_model_len": [8192],
-        }
-    elif memory_gb >= 48:  # L40S, A6000 class
-        return {
-            "max_num_seqs": [12, 16, 24],
-            "gpu_memory_utilization": [0.85, 0.9],
-            "max_model_len": [8192],
-        }
-    elif memory_gb >= 32:  # V100-32GB class
-        return {
-            "max_num_seqs": [8, 12, 16],
-            "gpu_memory_utilization": [0.85],
-            "max_model_len": [8192],
-        }
-    elif memory_gb >= 16:  # RTX 4090, A4000 class
-        return {
-            "max_num_seqs": [4, 8, 12],
-            "gpu_memory_utilization": [0.85],
-            "max_model_len": [4096],
-        }
-    else:  # < 16GB - not recommended for 8B models
-        raise ValueError(
-            f"GPU memory ({memory_gb:.0f} GB) is below 16 GB minimum. "
-            f"Use a smaller model (1B-3B) or a GPU with more memory."
-        )
 
 
 def load_base_config(config_path: Path) -> Dict[str, Any]:
@@ -189,7 +152,7 @@ def load_base_config(config_path: Path) -> Dict[str, Any]:
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    _debug_print(f"Loaded base config: {config_path.name}")
+    debug_print(f"Loaded base config: {config_path.name}")
     return config
 
 
@@ -218,15 +181,14 @@ def create_sweep_config(
     )
     config["experiment_metadata"]["experiment_name"] = f"{base_name}_sweep_{sweep_id}"
 
-    # Find the model config and update vllm_config
-    model_config = config.get("model_config", {})
-    models = model_config.get("models", {})
+    # Find the model definitions and update vllm_config
+    model_definitions = config.get("model_definitions", {})
 
-    for model_name, model_def in models.items():
+    for model_name, model_def in model_definitions.items():
         if "vllm_config" in model_def:
             for key, value in params.items():
                 model_def["vllm_config"][key] = value
-                _debug_print(f"Set {model_name}.vllm_config.{key} = {value}")
+                debug_print(f"Set {model_name}.vllm_config.{key} = {value}")
 
     return config
 
@@ -265,26 +227,25 @@ def run_experiment(
             f"0-{questions}",
         ]
 
-        _info_print(f"Running: {exp_name} ({questions} questions)")
-        _debug_print(f"Command: {' '.join(cmd)}")
+        print(f"Running: {exp_name} ({questions} questions)")
+        debug_print(f"Command: {' '.join(cmd)}")
+
+        # Show output in real-time if debug or live status mode is enabled
+        show_output = is_debug_enabled() or is_live_status_enabled()
 
         result = subprocess.run(
             cmd,
             cwd=project_root,
-            capture_output=not DEBUG,  # Show output if debug mode
+            capture_output=not show_output,
             text=True,
-            timeout=3600,  # 1 hour timeout
         )
         success = result.returncode == 0
-        if not success and not DEBUG:
-            _debug_print(f"stdout: {result.stdout}")
-            _debug_print(f"stderr: {result.stderr}")
+        if not success and not show_output:
+            debug_print(f"stdout: {result.stdout}")
+            debug_print(f"stderr: {result.stderr}")
         return success, exp_name
-    except subprocess.TimeoutExpired:
-        _info_print(f"Timeout: {exp_name}")
-        return False, exp_name
     except Exception as e:
-        _info_print(f"Error: {exp_name} - {e}")
+        print(f"Error: {exp_name} - {e}")
         return False, exp_name
     finally:
         # Clean up temp file
@@ -299,7 +260,7 @@ def find_job_summary(exp_name: str, benchmark: str) -> Optional[Dict[str, Any]]:
 
     Args:
         exp_name: Experiment name
-        benchmark: Benchmark subcategory (e.g., dev_snap)
+        benchmark: Benchmark subcategory (e.g., dev_vllm)
 
     Returns:
         Job summary dictionary or None if not found
@@ -308,16 +269,16 @@ def find_job_summary(exp_name: str, benchmark: str) -> Optional[Dict[str, Any]]:
     summary_dir = project_root / exp_root / benchmark / exp_name / "job_summary"
 
     if not summary_dir.exists():
-        _debug_print(f"Summary dir not found: {summary_dir}")
+        debug_print(f"Summary dir not found: {summary_dir}")
         return None
 
     summaries = sorted(summary_dir.glob("*.json"))
     if not summaries:
-        _debug_print(f"No summaries in: {summary_dir}")
+        debug_print(f"No summaries in: {summary_dir}")
         return None
 
     latest = summaries[-1]
-    _debug_print(f"Loading summary: {latest}")
+    debug_print(f"Loading summary: {latest}")
 
     with open(latest) as f:
         return json.load(f)
@@ -343,11 +304,16 @@ def collect_results(
         if not summary:
             continue
 
-        hw = summary.get("hardware_utilization", {})
         tp = summary.get("throughput_performance", {})
         proc = summary.get("processing_statistics", {})
-        vllm_cfg = summary.get("vllm_configuration", {})
-        token_stats = summary.get("token_time_statistics", {})
+
+        # Get vLLM config from first model in model_definitions
+        model_configs = summary.get("model_definitions", {})
+        vllm_cfg = {}
+        for _, cfg in model_configs.items():
+            if cfg.get("backend") == "vllm":
+                vllm_cfg = cfg
+                break
 
         # Extract params from experiment name or config
         results.append(
@@ -361,16 +327,13 @@ def collect_results(
                 "success_rate": proc.get("questions_succeeded", 0)
                 / max(proc.get("questions_attempted", 1), 1)
                 * 100,
-                "peak_mem_gb": hw.get("peak_gpu_memory_gb", 0),
-                "avg_mem_gb": hw.get("average_gpu_memory_gb", 0),
-                "kv_hit_rate": hw.get("kv_cache_stats", {}).get("cache_hit_rate", 0)
-                * 100,
+                # Throughput metrics
                 "tokens_per_sec": tp.get("tokens_per_second", 0),
                 "questions_per_sec": tp.get("questions_per_second", 0),
                 "duration_sec": summary.get("duration_seconds", 0),
                 # Context length optimization stats
-                "max_prompt_tokens": token_stats.get("max_prompt_tokens", 0),
-                "max_combined_tokens": token_stats.get("max_combined_tokens", 0),
+                "max_tokens_prompt": tp.get("max_tokens_prompt", 0),
+                "max_tokens_combined": tp.get("max_tokens_combined", 0),
             }
         )
 
@@ -387,106 +350,54 @@ def print_report(
         gpu_info: GPU information for context
     """
     if not results:
-        _info_print("\nNo results to report.")
+        print("\nNo results to report.")
         return
 
-    _info_print("\n" + "=" * 90)
-    _info_print("PARAMETER SWEEP REPORT")
-    _info_print("=" * 90)
+    print("\n" + "=" * 90)
+    print("PARAMETER SWEEP REPORT")
+    print("=" * 90)
 
     if gpu_info:
-        _info_print(f"\nGPU: {gpu_info['name']} ({gpu_info['memory_gb']:.0f} GB)")
+        print(f"\nGPU: {gpu_info['name']} ({gpu_info['memory_gb']:.0f} GB)")
 
     # Table 1: Configuration and Success
-    _info_print("\n" + "-" * 90)
-    _info_print(
+    print("\n" + "-" * 90)
+    print(
         f"{'max_num_seqs':<14} {'gpu_mem':<10} {'Questions':<12} {'Success':<10} {'Duration':<12}"
     )
-    _info_print("-" * 90)
+    print("-" * 90)
     for r in results:
-        _info_print(
+        print(
             f"{r['max_num_seqs']:<14} {r['gpu_memory_util']:<10} "
             f"{r['questions']:<12} {r['success_rate']:.1f}%{'':<6} "
             f"{r['duration_sec'] / 60:.1f} min"
         )
 
-    # Table 2: Memory Usage
-    _info_print("\n" + "-" * 90)
-    _info_print(
-        f"{'max_num_seqs':<14} {'Peak Mem':<14} {'Avg Mem':<14} {'KV Hit Rate':<14}"
-    )
-    _info_print("-" * 90)
+    # Table 2: Throughput
+    print("\n" + "-" * 90)
+    print(f"{'max_num_seqs':<14} {'Tokens/sec':<16} {'Questions/sec':<16}")
+    print("-" * 90)
     for r in results:
-        _info_print(
-            f"{r['max_num_seqs']:<14} {r['peak_mem_gb']:.1f} GB{'':<8} "
-            f"{r['avg_mem_gb']:.1f} GB{'':<8} {r['kv_hit_rate']:.1f}%"
+        print(
+            f"{r['max_num_seqs']:<14} {r['tokens_per_sec']:<16.2f} "
+            f"{r['questions_per_sec']:<16.4f}"
         )
 
-    # Table 3: Throughput
-    _info_print("\n" + "-" * 90)
-    _info_print(f"{'max_num_seqs':<14} {'Tokens/sec':<16} {'Questions/sec':<16}")
-    _info_print("-" * 90)
-    for r in results:
-        _info_print(
-            f"{r['max_num_seqs']:<14} {r['tokens_per_sec']:.2f}{'':<12} "
-            f"{r['questions_per_sec']:.4f}"
-        )
-
-    # Table 4: Context Length Analysis (for max_model_len optimization)
-    _info_print("\n" + "-" * 90)
-    _info_print("CONTEXT LENGTH ANALYSIS (for max_model_len optimization)")
-    _info_print("-" * 90)
-    _info_print(
+    # Table 3: Context Length Analysis (for max_model_len optimization)
+    print("\n" + "-" * 90)
+    print("CONTEXT LENGTH ANALYSIS (for max_model_len optimization)")
+    print("-" * 90)
+    print(
         f"{'max_num_seqs':<14} {'max_model_len':<14} {'Max Prompt':<14} {'Max Combined':<14}"
     )
-    _info_print("-" * 90)
+    print("-" * 90)
     for r in results:
-        _info_print(
+        print(
             f"{r['max_num_seqs']:<14} {r['max_model_len']:<14} "
-            f"{r['max_prompt_tokens']:<14} {r['max_combined_tokens']:<14}"
+            f"{r['max_tokens_prompt']:<14} {r['max_tokens_combined']:<14}"
         )
 
-    # Context length recommendation
-    if results:
-        max_combined = max(r["max_combined_tokens"] for r in results)
-        if max_combined > 0:
-            # Recommend 20% headroom above observed max
-            recommended_len = int(max_combined * 1.2)
-            # Round up to nearest power of 2 boundary for efficiency
-            power_of_2 = 1
-            while power_of_2 < recommended_len:
-                power_of_2 *= 2
-            _info_print(f"\nMax combined tokens observed: {max_combined}")
-            _info_print(f"Recommended max_model_len: {power_of_2} (with 20% headroom)")
-
-    # Recommendations
-    if len(results) > 1:
-        # Filter successful runs
-        successful = [r for r in results if r["success_rate"] >= 95]
-        if successful:
-            best_tps = max(successful, key=lambda r: r["tokens_per_sec"])
-            _info_print("\n" + "=" * 90)
-            _info_print("RECOMMENDATION")
-            _info_print("=" * 90)
-            _info_print(f"\nBest throughput with high success rate:")
-            _info_print(f"  max_num_seqs: {best_tps['max_num_seqs']}")
-            _info_print(f"  gpu_memory_utilization: {best_tps['gpu_memory_util']}")
-            _info_print(f"  tokens/sec: {best_tps['tokens_per_sec']:.2f}")
-            _info_print(f"  peak memory: {best_tps['peak_mem_gb']:.1f} GB")
-
-            # Check if still improving
-            sorted_by_batch = sorted(successful, key=lambda r: r["max_num_seqs"])
-            if len(sorted_by_batch) >= 2:
-                last = sorted_by_batch[-1]
-                second_last = sorted_by_batch[-2]
-                if last["tokens_per_sec"] > second_last["tokens_per_sec"] * 1.05:
-                    _info_print(
-                        "\nNote: Throughput still improving. Consider testing higher max_num_seqs."
-                    )
-        else:
-            _info_print("\nNo runs with >= 95% success rate. Check for OOM errors.")
-
-    _info_print("=" * 90)
+    print("=" * 90)
 
 
 def main():
@@ -501,12 +412,6 @@ def main():
         "--config",
         type=str,
         help="Path to base config file",
-    )
-
-    parser.add_argument(
-        "--quick-test",
-        action="store_true",
-        help="Run quick validation test (10 questions, single config)",
     )
 
     parser.add_argument(
@@ -545,29 +450,10 @@ def main():
     )
 
     parser.add_argument(
-        "--questions",
-        type=int,
-        default=512,
-        help="Number of questions per sweep run (default: 512)",
-    )
-
-    parser.add_argument(
-        "--report-only",
-        action="store_true",
-        help="Generate report from existing runs without running new tests",
-    )
-
-    parser.add_argument(
         "--benchmark",
         type=str,
-        default="dev_snap",
-        help="Benchmark subcategory for finding results (default: dev_snap)",
-    )
-
-    parser.add_argument(
-        "--auto-suggest",
-        action="store_true",
-        help="Auto-suggest parameter ranges based on detected GPU",
+        default=None,
+        help="Benchmark subcategory (required for --clean without --config)",
     )
 
     parser.add_argument(
@@ -576,72 +462,58 @@ def main():
         help="Show what would be tested without running",
     )
 
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Clear previous experiment data for the benchmark before running",
+    )
+
     args = parser.parse_args()
 
     # Detect GPU
     gpu_info = get_gpu_info()
     if gpu_info:
-        _info_print(
-            f"Detected GPU: {gpu_info['name']} ({gpu_info['memory_gb']:.0f} GB)"
-        )
+        print(f"Detected GPU: {gpu_info['name']} ({gpu_info['memory_gb']:.0f} GB)")
     else:
-        _info_print("Warning: Could not detect GPU")
+        print("Warning: Could not detect GPU")
 
-    # Handle report-only mode
-    if args.report_only:
-        # Find all experiments in benchmark
-        exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
-        benchmark_dir = project_root / exp_root / args.benchmark
-
-        if not benchmark_dir.exists():
-            _info_print(f"No experiments found in: {benchmark_dir}")
-            sys.exit(1)
-
-        experiments = [d.name for d in benchmark_dir.iterdir() if d.is_dir()]
-        results = collect_results(experiments, args.benchmark)
-        print_report(results, gpu_info)
+    # Handle --clean without --config (clean-only mode)
+    if args.clean and not args.config:
+        if not args.benchmark:
+            parser.error("--benchmark is required when using --clean without --config")
+        if not args.benchmark.startswith("dev_"):
+            parser.error(
+                f"--clean only allowed for dev_* benchmarks, got '{args.benchmark}'"
+            )
+        clean_benchmark_data(args.benchmark)
         sys.exit(0)
 
-    # Require config for non-report modes
+    # Require config for sweep
     if not args.config:
-        parser.error("--config required (unless using --report-only)")
+        parser.error("--config is required")
 
     config_path = Path(args.config)
     base_config = load_base_config(config_path)
 
-    # Handle quick test
-    if args.quick_test:
-        _info_print("\n" + "=" * 60)
-        _info_print("QUICK VALIDATION TEST")
-        _info_print("=" * 60)
-
-        success, exp_name = run_experiment(
-            base_config,
-            questions=10,
+    # Handle --clean with --config: clean the benchmark from config
+    if args.clean:
+        benchmark = base_config.get("experiment_metadata", {}).get(
+            "benchmark_subcategory"
         )
-
-        if success:
-            _info_print("\n✓ Quick test passed!")
-            _info_print("\nNext steps:")
-            _info_print("  1. Run parameter sweep (modify max_num_seqs accordingly):")
-            _info_print(
-                f"     python script/cluster/vllm_param_sweep.py --config {args.config} \\"
+        if not benchmark:
+            parser.error(
+                "Config missing experiment_metadata.benchmark_subcategory, "
+                "cannot determine what to clean"
             )
-            _info_print("         --sweep max_num_seqs --max-num-seqs 8 16 32")
-        else:
-            _info_print("\n✗ Quick test failed. Check configuration and logs.")
-            sys.exit(1)
-
-        sys.exit(0)
+        if not benchmark.startswith("dev_"):
+            parser.error(
+                f"--clean only allowed for dev_* benchmarks, got '{benchmark}'"
+            )
+        clean_benchmark_data(benchmark)
 
     # Determine parameter ranges
     param_ranges: Dict[str, List[Any]] = {}
 
-    if args.auto_suggest:
-        param_ranges = suggest_param_ranges(gpu_info)
-        _info_print(f"\nAuto-suggested ranges: {param_ranges}")
-
-    # Override with explicit args
     if args.max_num_seqs:
         param_ranges["max_num_seqs"] = args.max_num_seqs
     if args.gpu_memory_util:
@@ -659,37 +531,51 @@ def main():
 
     if not param_ranges:
         parser.error(
-            "No parameters to sweep. Use --auto-suggest, --max-num-seqs, "
+            "No parameters to sweep. Use --max-num-seqs, "
             "--gpu-memory-util, --max-model-len, or --sweep with --values"
         )
+
+    # Calculate questions count: 2x the max max_num_seqs value
+    max_num_seqs_values = param_ranges.get("max_num_seqs", [32])
+    questions_count = max(max_num_seqs_values) * 2
+
+    # Cap by available questions in the dataset
+    questions_file = base_config.get("experiment_metadata", {}).get("questions_file")
+    if questions_file:
+        questions_path = Path(questions_file)
+        if not questions_path.is_absolute():
+            questions_path = project_root / questions_file
+        if questions_path.exists():
+            with open(questions_path) as f:
+                available_questions = sum(1 for line in f if line.strip())
+            questions_count = min(questions_count, available_questions)
 
     # Generate sweep combinations
     param_names = list(param_ranges.keys())
     param_values = list(param_ranges.values())
     combinations = list(product(*param_values))
 
-    _info_print("\n" + "=" * 60)
-    _info_print("PARAMETER SWEEP")
-    _info_print("=" * 60)
-    _info_print(f"\nSweeping: {param_names}")
-    _info_print(f"Combinations: {len(combinations)}")
-    _info_print(f"Questions per run: {args.questions}")
-    _info_print(f"Estimated runs: {len(combinations)}")
+    print("\n" + "=" * 60)
+    print("PARAMETER SWEEP")
+    print("=" * 60)
+    print(f"\nSweeping: {param_names}")
+    print(f"Combinations: {len(combinations)}")
+    print(f"Questions per run: {questions_count}")
 
     # Show combinations
-    _info_print("\nConfigurations to test:")
+    print("\nConfigurations to test:")
     for i, combo in enumerate(combinations):
         params = dict(zip(param_names, combo))
-        _info_print(f"  {i + 1}. {params}")
+        print(f"  {i + 1}. {params}")
 
     if args.dry_run:
-        _info_print("\n[Dry run - no tests executed]")
+        print("\n[Dry run - no tests executed]")
         sys.exit(0)
 
     # Confirm
     response = input("\nContinue? [y/N]: ")
     if response.lower() != "y":
-        _info_print("Aborted")
+        print("Aborted")
         sys.exit(0)
 
     # Run sweep
@@ -703,14 +589,14 @@ def main():
         config = create_sweep_config(base_config, params, sweep_id)
         success, exp_name = run_experiment(
             config,
-            args.questions,
+            questions_count,
         )
 
         if success:
             experiments.append(exp_name)
-            _info_print(f"✓ Completed: {params}")
+            print(f"✓ Completed: {params}")
         else:
-            _info_print(f"✗ Failed: {params}")
+            print(f"✗ Failed: {params}")
 
     # Collect and report results
     benchmark = base_config.get("experiment_metadata", {}).get(

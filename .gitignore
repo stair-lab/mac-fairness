@@ -17,15 +17,7 @@ slurm_logs/
 
 # Benchmark data
 raw_data/
-# data/*
-# !data/dev_ollama/
-# data/dev_ollama/*
-# !data/dev_ollama/bbq_race_sample_0-9.jsonl
-# !data/dev_snap/
-# data/dev_snap/*
-# !data/dev_snap/bbq_race.jsonl
-
-data/dev_snap/*
+data/dev_*
 
 # Node.js / TypeScript
 node_modules/

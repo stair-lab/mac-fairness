@@ -12,14 +12,14 @@ class VanillaRouter:
     - Conversations continue for a fixed number of rounds
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, conversation_config: Dict[str, Any]):
         """Initialize vanilla router.
 
         Args:
-            config: Routing configuration with max_rounds and strategy
+            conversation_config: Conversation configuration with max_rounds and routing_strategy
         """
-        self.strategy = config.get("strategy", "vanilla")
-        self.max_rounds = config.get("max_rounds", 3)
+        self.routing_strategy = conversation_config["routing_strategy"]
+        self.max_rounds = conversation_config["max_rounds"]
 
         if self.max_rounds < 1:
             raise ValueError(f"max_rounds must be >= 1, got {self.max_rounds}")
@@ -120,4 +120,4 @@ class VanillaRouter:
 
     def __repr__(self) -> str:
         """String representation."""
-        return f"VanillaRouter(strategy={self.strategy}, max_rounds={self.max_rounds})"
+        return f"VanillaRouter(routing_strategy={self.routing_strategy}, max_rounds={self.max_rounds})"

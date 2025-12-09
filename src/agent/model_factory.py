@@ -1,15 +1,15 @@
-"""Model factory for creating agent instances with automatic backend detection."""
+"""Model factory for creating agent instances."""
 
-from typing import Dict, Any
-from .ollama_agent import OllamaAgent
-from .vllm_agent import VLLMAgent
+from typing import Any, Dict, Union
+from .async_ollama_agent import AsyncOllamaAgent
+from .async_vllm_agent import AsyncVLLMAgent
 
 
 class ModelFactory:
-    """Factory for creating model instances with shared backbone support.
+    """Factory for creating model instances.
 
-    Automatically detects backend based on model naming patterns and configuration.
-    Supports shared model backbone for memory efficiency.
+    Agents specify model names which are looked up in the models config.
+    Backend must be explicitly specified in model_definitions.
     """
 
     def __init__(self, experiment_config: Dict[str, Any]):
@@ -18,54 +18,36 @@ class ModelFactory:
         Args:
             experiment_config: Experiment configuration dictionary
 
-        Raises:
-            ValueError: If configuration is invalid
+        The model_definitions section contains models (model_name as key):
+            model_definitions:
+              llama31_8b:
+                backend: vllm
+                model_path: meta-llama/Llama-3.1-8B-Instruct
+                vllm_config: ...
         """
         self.experiment_config = experiment_config
-        self.shared_backbone = experiment_config.get("shared_model_backbone")
-        self.model_definitions = experiment_config.get("models", {})
+        # Models are defined under model_definitions (model_name as key)
+        self.model_definitions = experiment_config.get("model_definitions", {})
 
         # Cache for shared model instances (not used for Ollama, prepared for vLLM)
         self._shared_instances = {}
 
-        # Validate shared backbone if specified
-        if self.shared_backbone and self.shared_backbone not in self.model_definitions:
-            raise ValueError(
-                f"shared_model_backbone '{self.shared_backbone}' not found in models. "
-                f"Available models: {list(self.model_definitions.keys())}"
-            )
-
-    def create_agent(self, agent_config: Dict[str, Any]) -> Any:
-        """Create an agent instance based on configuration.
+    def _resolve_model_config(
+        self, agent_config: Dict[str, Any]
+    ) -> tuple[str, Dict[str, Any], str]:
+        """Resolve model name, config, and backend from agent config.
 
         Args:
             agent_config: Agent configuration dictionary
 
         Returns:
-            Agent instance (OllamaAgent, VLLMAgent, etc.)
+            Tuple of (model_name, model_config, backend)
 
         Raises:
             ValueError: If configuration is invalid
-            NotImplementedError: If backend is not yet implemented
         """
-        # Determine which model to use
-        model_spec = agent_config.get("model")
-        if not model_spec:
-            raise ValueError(
-                f"Agent {agent_config.get('agent_id')} missing 'model' field"
-            )
+        model_name = agent_config["model"]
 
-        if model_spec == "shared":
-            if not self.shared_backbone:
-                raise ValueError(
-                    f"Agent {agent_config.get('agent_id')} specifies 'model: shared' "
-                    "but no shared_model_backbone is defined in experiment config"
-                )
-            model_name = self.shared_backbone
-        else:
-            model_name = model_spec
-
-        # Get model configuration
         if model_name not in self.model_definitions:
             raise ValueError(
                 f"Model '{model_name}' not found in model definitions. "
@@ -73,22 +55,37 @@ class ModelFactory:
             )
 
         model_config = self.model_definitions[model_name]
+        backend = self._get_backend(model_name, model_config)
 
-        # Detect backend
-        backend = self._detect_backend(model_name, model_config)
+        return model_name, model_config, backend
 
-        # Create agent based on backend
+    def create_agent(
+        self, agent_config: Dict[str, Any]
+    ) -> Union[AsyncOllamaAgent, AsyncVLLMAgent]:
+        """Create an async agent instance based on configuration.
+
+        Args:
+            agent_config: Agent configuration dictionary
+
+        Returns:
+            Agent instance (AsyncOllamaAgent or AsyncVLLMAgent)
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        _, model_config, backend = self._resolve_model_config(agent_config)
+
         if backend == "ollama":
-            return self._create_ollama_agent(agent_config, model_config)
+            return self._create_async_ollama_agent(agent_config, model_config)
         elif backend == "vllm":
-            return self._create_vllm_agent(agent_config, model_config)
+            return self._create_async_vllm_agent(agent_config, model_config)
         else:
             raise ValueError(
                 f"Unsupported backend: {backend}. Supported backends: ollama, vllm"
             )
 
-    def _detect_backend(self, model_name: str, model_config: Dict[str, Any]) -> str:
-        """Detect backend based on model configuration and naming patterns.
+    def _get_backend(self, model_name: str, model_config: Dict[str, Any]) -> str:
+        """Get backend from model configuration.
 
         Args:
             model_name: Name of the model
@@ -96,67 +93,29 @@ class ModelFactory:
 
         Returns:
             Backend name ("ollama" or "vllm")
+
+        Raises:
+            ValueError: If backend not specified
         """
-        # Explicit backend specification takes precedence
-        if "backend" in model_config:
-            return model_config["backend"]
+        backend = model_config.get("backend")
+        if not backend:
+            raise ValueError(
+                f"Model '{model_name}' missing required 'backend' field. "
+                "Must be 'vllm' or 'ollama'."
+            )
+        return backend
 
-        # Auto-detect based on model configuration patterns
-
-        # Ollama-specific patterns
-        if "model_name" in model_config:
-            model_str = model_config["model_name"]
-            # Ollama models typically have version/quantization suffixes
-            ollama_patterns = [
-                "-q4_K_M",
-                "-q8_0",
-                "-q5_K_S",  # Quantization patterns
-                ":1b",
-                ":3b",
-                ":7b",
-                ":8b",  # Size patterns
-                "-instruct",
-                "-it",  # Instruction-tuned patterns
-            ]
-            if any(pattern in model_str for pattern in ollama_patterns):
-                return "ollama"
-
-        # vLLM-specific patterns
-        if "model_path" in model_config:
-            # HuggingFace model paths (org/model format) or local paths typically use vLLM
-            # Detection is based on path structure, not hardcoded vendor names
-            model_path = model_config["model_path"]
-            # HuggingFace format: "organization/model-name" or absolute/relative path
-            if "/" in model_path:
-                return "vllm"
-
-        # Check for vLLM-specific configuration
-        if "vllm_config" in model_config:
-            return "vllm"
-
-        # Check for Ollama-specific configuration
-        if "ollama_config" in model_config:
-            return "ollama"
-
-        # Default based on environment
-        # If in dev_ollama benchmark, default to ollama
-        if self.experiment_config.get("benchmark_subcategory") == "dev_ollama":
-            return "ollama"
-
-        # Otherwise default to vllm for production
-        return "vllm"
-
-    def _create_ollama_agent(
+    def _create_async_ollama_agent(
         self, agent_config: Dict[str, Any], model_config: Dict[str, Any]
-    ) -> OllamaAgent:
-        """Create an Ollama agent instance.
+    ) -> AsyncOllamaAgent:
+        """Create an async Ollama agent instance.
 
         Args:
             agent_config: Agent configuration
             model_config: Model configuration
 
         Returns:
-            OllamaAgent instance
+            AsyncOllamaAgent instance
         """
         # Ensure model_name is present for Ollama
         if "model_name" not in model_config:
@@ -165,19 +124,19 @@ class ModelFactory:
                 "Example: 'llama3.2:1b-instruct-q4_K_M'"
             )
 
-        return OllamaAgent(agent_config, model_config)
+        return AsyncOllamaAgent(agent_config, model_config)
 
-    def _create_vllm_agent(
+    def _create_async_vllm_agent(
         self, agent_config: Dict[str, Any], model_config: Dict[str, Any]
-    ) -> VLLMAgent:
-        """Create a vLLM agent instance.
+    ) -> AsyncVLLMAgent:
+        """Create an async vLLM agent instance with batching support.
 
         Args:
             agent_config: Agent configuration
             model_config: Model configuration
 
         Returns:
-            VLLMAgent instance
+            AsyncVLLMAgent instance
 
         Raises:
             ValueError: If configuration is invalid
@@ -189,23 +148,22 @@ class ModelFactory:
                 "Example: 'meta-llama/Llama-3.1-8B-Instruct'"
             )
 
-        # Create and return vLLM agent
-        # VLLMAgent handles shared model instance caching internally
-        return VLLMAgent(agent_config, model_config)
+        # Create and return async vLLM agent
+        # AsyncVLLMAgent handles shared model instance and batched engine internally
+        return AsyncVLLMAgent(agent_config, model_config)
 
     def get_backend_info(self) -> Dict[str, Any]:
         """Get information about configured backends and models.
 
         Returns:
-            Dictionary with backend and model information
+            Dictionary keyed by model name with backend and config info
         """
-        info = {"shared_backbone": self.shared_backbone, "models": {}}
+        info: Dict[str, Any] = {}
 
         for model_name, model_config in self.model_definitions.items():
-            backend = self._detect_backend(model_name, model_config)
-            info["models"][model_name] = {
+            backend = self._get_backend(model_name, model_config)
+            info[model_name] = {
                 "backend": backend,
-                "family": model_config.get("family", "unknown"),
                 "config": model_config,
             }
 
@@ -214,6 +172,4 @@ class ModelFactory:
     def __repr__(self) -> str:
         """String representation of factory."""
         model_list = list(self.model_definitions.keys())
-        return (
-            f"ModelFactory(shared_backbone={self.shared_backbone}, models={model_list})"
-        )
+        return f"ModelFactory(models={model_list})"

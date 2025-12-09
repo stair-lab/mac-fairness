@@ -1,40 +1,37 @@
 """Base agent class with shared functionality for all agent implementations."""
 
 import json
-import os
 import re
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-
-def _debug_print(msg: str) -> None:
-    """Print debug message if MAC_FAIRNESS_DEBUG_FLAG is set."""
-    if os.environ.get("MAC_FAIRNESS_DEBUG_FLAG"):
-        print(f"[DEBUG] {msg}")
-
-
-def _info_print(msg: str) -> None:
-    """Print info message (always shown for agent initialization progress)."""
-    print(msg)
+from src.utils import debug_print
 
 
 @runtime_checkable
-class AgentProtocol(Protocol):
-    """Protocol defining the required interface for all agents."""
+class AsyncAgentProtocol(Protocol):
+    """Protocol defining the required interface for async agents.
+
+    Async agents support concurrent generation calls, enabling
+    cross-conversation parallelism (multiple conversations at once).
+
+    The generate method takes a session parameter for connection reuse.
+    """
 
     agent_id: str
     role: str
     temperature: float
     max_tokens: int
 
-    def generate(
+    async def generate(
         self,
+        session: Any,  # aiohttp.ClientSession or similar
         prompt: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         response_format: str = "json",
     ) -> Dict[str, Any]:
-        """Generate a response from the agent."""
+        """Generate a response from the agent asynchronously."""
         ...
 
 
@@ -180,35 +177,8 @@ class BaseAgent(ABC):
             except json.JSONDecodeError:
                 pass
 
-        _debug_print(f"Failed to parse JSON from response: {response_text[:200]}...")
+        debug_print(f"Failed to parse JSON from response: {response_text[:200]}...")
         return None
-
-    @abstractmethod
-    def generate(
-        self,
-        prompt: str,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        response_format: str = "json",
-    ) -> Dict[str, Any]:
-        """Generate response from the model.
-
-        Args:
-            prompt: Input prompt
-            temperature: Override temperature (optional)
-            max_tokens: Override max tokens (optional)
-            response_format: Expected format ("json" or "text")
-
-        Returns:
-            Dictionary containing:
-                - text: Raw text response
-                - structured_output: Parsed JSON (if json format)
-                - tokens_generated: Actual tokens in response
-                - tokens_prompt: Prompt tokens
-                - generation_time_ms: Generation time in milliseconds
-                - exceeded_max_tokens: Whether max_tokens was hit
-        """
-        pass
 
     def __repr__(self) -> str:
         """String representation of agent."""

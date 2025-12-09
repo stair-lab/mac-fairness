@@ -16,10 +16,10 @@ class ParticipantPromptBuilder(BasePromptBuilder):
         Returns:
             System prompt string
         """
-        role = agent_config.get("role", "participant")
+        role = agent_config["role"]
         persona = agent_config.get("persona")
         demographics = agent_config.get("demographics")
-        if_as_human = agent_config.get("if_as_human", True)
+        if_as_human = agent_config["if_as_human"]
 
         # Build identity components
         identity_parts = []
