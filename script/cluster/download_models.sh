@@ -33,7 +33,7 @@ fi
 echo "Logging in to HuggingFace..."
 hf auth login --token "$HF_TOKEN"  # skipping for now --add-to-git-credential
 
-# Models to download (organized by size)
+# Models to download (organized by model family)
 # Check vLLM model support: https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/models
 #
 # Sampling parameter recommendations (from model cards):
@@ -42,20 +42,30 @@ hf auth login --token "$HF_TOKEN"  # skipping for now --add-to-git-credential
 # - Others: No explicit recommendations in model cards
 
 models=(
-    # === Tiny/Small/Medium (<10B params): 13 models ===
-    "google/gemma-3-1b-it"
-    "meta-llama/Llama-3.2-1B-Instruct"
-    "Qwen/Qwen2.5-1.5B-Instruct"
-    "meta-llama/Llama-3.2-3B-Instruct"
-    "Qwen/Qwen2.5-3B-Instruct"
+    # === Google Gemma (newest first) ===
     "google/gemma-3-4b-it"
-    "Qwen/Qwen3-4B-Instruct-2507"
-    "microsoft/Phi-3-mini-4k-instruct"
-    "microsoft/Phi-3-mini-128k-instruct"
-    "microsoft/Phi-3.5-mini-instruct"
-    "microsoft/Phi-4-mini-instruct"
-    "mistralai/Mistral-7B-Instruct-v0.3"
+    "google/gemma-3-1b-it"
+
+    # === Meta Llama (newest first) ===
+    "meta-llama/Llama-3.3-70B-Instruct"
+    "meta-llama/Llama-3.2-3B-Instruct"
+    "meta-llama/Llama-3.2-1B-Instruct"
+    "meta-llama/Llama-3.1-70B-Instruct"
     "meta-llama/Llama-3.1-8B-Instruct"
+
+    # === Microsoft Phi (newest first) ===
+    "microsoft/Phi-4-mini-instruct"
+    "microsoft/Phi-3.5-mini-instruct"
+    "microsoft/Phi-3-mini-128k-instruct"
+    "microsoft/Phi-3-mini-4k-instruct"
+
+    # === Mistral AI ===
+    "mistralai/Mistral-7B-Instruct-v0.3"
+
+    # === Alibaba Qwen (newest first) ===
+    "Qwen/Qwen3-4B-Instruct-2507"
+    "Qwen/Qwen2.5-3B-Instruct"
+    "Qwen/Qwen2.5-1.5B-Instruct"
 )
 
 echo "============================================================"
