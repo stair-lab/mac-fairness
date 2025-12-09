@@ -1,4 +1,7 @@
 # Project-specific: MAC Fairness
+# Anonymous
+private/
+
 # Experiment outputs
 bookkeeping/
 experiment/

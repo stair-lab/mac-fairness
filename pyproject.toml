@@ -6,9 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 
 dependencies = [
-    "vllm>=0.12.0",
+    "vllm>=0.12.0; sys_platform != 'darwin'",
     "pyyaml>=6.0.3",
-    "huggingface-hub[mcp]>=0.36.0",
+    "huggingface-hub[mcp]>=0.36.0; sys_platform != 'darwin'",
     "aiohttp[speedups]>=3.13.0",
 ]
 
