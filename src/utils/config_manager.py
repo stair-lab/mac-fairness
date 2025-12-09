@@ -12,7 +12,7 @@ from src.utils.errors import (
     FileNotFoundError_,
 )
 
-from src.utils.recording import display_path
+from src.utils.logging import display_path
 
 
 class ConfigManager:
@@ -67,7 +67,7 @@ class ConfigManager:
             "conversation_config",
             "retry_config",
             "identity_reveal_config",
-            "model_config",
+            "model_definitions",
             "agent_definitions",
         ]
 
@@ -88,19 +88,40 @@ class ConfigManager:
                 raise MissingConfigSectionError(f"experiment_metadata.{field}")
 
         # Validate conversation_config
-        conv_config = config["conversation_config"]
-        conv_field_types = {
+        conversation_config = config["conversation_config"]
+        conversation_field_types = {
             "routing_strategy": str,
             "max_rounds": int,
         }
-        for field, expected_type in conv_field_types.items():
-            if field not in conv_config:
+        for field, expected_type in conversation_field_types.items():
+            if field not in conversation_config:
                 raise MissingConfigSectionError(f"conversation_config.{field}")
-            if not isinstance(conv_config[field], expected_type):
+            if not isinstance(conversation_config[field], expected_type):
                 raise InvalidConfigFieldError(
                     field=f"conversation_config.{field}",
                     expected_type=expected_type.__name__,
-                    actual_type=type(conv_config[field]).__name__,
+                    actual_type=type(conversation_config[field]).__name__,
+                )
+
+        # Validate retry_config
+        retry_config = config["retry_config"]
+        retry_field_types = {
+            "max_retries": int,
+            "answer_match_threshold": float,
+            "retry_on_validation_error": bool,
+            "retry_on_generation_error": bool,
+        }
+        for field, expected_type in retry_field_types.items():
+            if field not in retry_config:
+                raise MissingConfigSectionError(f"retry_config.{field}")
+            if not isinstance(retry_config[field], expected_type):
+                # Allow int for float fields
+                if expected_type == float and isinstance(retry_config[field], int):
+                    continue
+                raise InvalidConfigFieldError(
+                    field=f"retry_config.{field}",
+                    expected_type=expected_type.__name__,
+                    actual_type=type(retry_config[field]).__name__,
                 )
 
         # Validate identity_reveal_config has all required boolean fields

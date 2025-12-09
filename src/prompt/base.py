@@ -101,7 +101,7 @@ class BasePromptBuilder(ABC):
         # Extract attributes based on reveal settings
         persona = agent_config.get("persona") if reveal_persona else None
         demographics = agent_config.get("demographics") if reveal_demographics else None
-        if_as_human = agent_config.get("if_as_human", True)
+        if_as_human = agent_config["if_as_human"]
 
         # Build identity parts
         identity_parts = []
