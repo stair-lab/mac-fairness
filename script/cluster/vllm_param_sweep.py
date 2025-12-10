@@ -24,6 +24,9 @@ Usage:
     # Add live status or debug flag
     MAC_FAIRNESS_LIVE_STATUS=1 python ...
 
+    # Add gpu number
+    CUDA_VISIBLE_DEVICES=2,5 python ...
+
 Environment Variables:
     MAC_FAIRNESS_WORKSPACE - Project root directory (required)
     MAC_FAIRNESS_DEBUG_FLAG - Enable debug output

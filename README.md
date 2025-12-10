@@ -313,6 +313,9 @@ The framework requires questions in a unified JSONL format (see `schema/2025-11-
 
 ```bash
 # Format BBQ benchmark
+mkdir -p raw_data/BBQ/data
+curl -L https://github.com/nyu-mll/BBQ/archive/main.tar.gz | tar -xz --strip-components=2 -C raw_data/BBQ/data BBQ-main/data
+
 python script/formatter/bbq_formatter.py \
   --input ./raw_data/BBQ/data/Race_ethnicity.jsonl \
   --output ./data/BBQ/bbq_race.jsonl

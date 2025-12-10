@@ -8,7 +8,7 @@ experiment_metadata:
   experiment_name: param_sweep_base
   benchmark_subcategory: dev_vllm
   schema_version: "2025-11-27"
-  questions_file: data/dev_vllm/bbq_race.jsonl
+  questions_file: data/BBQ/bbq_race.jsonl
 
 conversation_config:
   routing_strategy: vanilla
@@ -30,31 +30,18 @@ identity_reveal_config:
 model_definitions:
   sweep_model:
     backend: vllm
-    # Change this to test different models from HF cache:
-    # - meta-llama/Llama-3.1-8B-Instruct  (128K context)
-    # - meta-llama/Llama-3.2-1B-Instruct  (128K context)
-    # - meta-llama/Llama-3.2-3B-Instruct  (128K context)
-    # - mistralai/Mistral-7B-Instruct-v0.3  (32K context)
-    # - Qwen/Qwen2.5-1.5B-Instruct  (128K context)
-    # - Qwen/Qwen2.5-3B-Instruct  (128K context)
-    # - Qwen/Qwen3-4B-Instruct-2507  (32K context)
-    # - google/gemma-3-1b-it  (8K context)
-    # - google/gemma-3-4b-it  (8K context)
-    # - microsoft/Phi-3-mini-4k-instruct  (4K context)
-    # - microsoft/Phi-3-mini-128k-instruct  (128K context)
-    # - microsoft/Phi-3.5-mini-instruct  (128K context)
-    # - microsoft/Phi-4-mini-instruct  (128K context)
-    model_path: meta-llama/Llama-3.1-8B-Instruct
+    model_path: google/gemma-3-4b-it # ! NOTE modify
 
     vllm_config:
-      tensor_parallel_size: 1
+      tensor_parallel_size: 1 # ! NOTE modify
       # These values are conservative starting points
       # They will be overridden during parameter sweeping
-      gpu_memory_utilization: 0.85
-      max_model_len: 4096 # set to appropriate value
+      gpu_memory_utilization: 0.85 # ! NOTE modify
+      max_model_len: 8192 # ! NOTE modify
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs: 1
+      max_num_seqs: 1 # ! NOTE modify
       enable_prefix_caching: true
+      enforce_eager: true
 
 agent_definitions:
 - agent_id: spkr_000

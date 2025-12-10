@@ -330,7 +330,7 @@ class ParticipantPromptBuilder(BasePromptBuilder):
 
         return f"""Respond with a JSON object in this exact format:
 {{
-  "rationale": Your reasoning behind your answer in clear and concise sentences,
+  "rationale": "Your reasoning behind your answer in clear and concise sentences.",
   "answer": {answer_format},
 }}
 Output ONLY the JSON object, no other text or markdown formatting."""
@@ -366,7 +366,7 @@ Output ONLY the JSON object, no other text or markdown formatting."""
 
         return f"""When answering the question, respond with a JSON object in this exact format:
 {{
-  "rationale": Your reasoning behind your answer in clear and concise sentences,
+  "rationale": "Your reasoning behind your answer in clear and concise sentences.",
   "answer": {answer_format},
 }}
 Output ONLY the JSON object, no other text or markdown formatting."""

@@ -177,7 +177,7 @@ class BaseAgent(ABC):
             except json.JSONDecodeError:
                 pass
 
-        debug_print(f"Failed to parse JSON from response: {response_text[:200]}...")
+        debug_print(f"Failed to parse JSON from response:\n{response_text}")
         return None
 
     def __repr__(self) -> str:
