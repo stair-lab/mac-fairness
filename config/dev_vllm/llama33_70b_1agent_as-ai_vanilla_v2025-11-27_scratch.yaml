@@ -36,14 +36,14 @@ model_definitions:
       gpu_memory_utilization: 0.95 # ! NOTE modify
       max_model_len: 2048 # ! NOTE modify
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs: 200 # ! NOTE modify
+      max_num_seqs: 256 # upperbound, in general enough to saturate GPU KV cache
       enable_prefix_caching: true
 
 agent_definitions:
 - agent_id: spkr_000
   role: participant
   persona: null
-  demographics: black
+  demographics: asian
   if_as_human: false
   model: llama33_70b
   temperature: 0.7
