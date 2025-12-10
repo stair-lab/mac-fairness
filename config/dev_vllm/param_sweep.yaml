@@ -30,18 +30,18 @@ identity_reveal_config:
 model_definitions:
   sweep_model:
     backend: vllm
-    model_path: google/gemma-3-4b-it # ! NOTE modify
+    model_path: meta-llama/Llama-3.1-70B-Instruct # ! NOTE modify
 
     vllm_config:
-      tensor_parallel_size: 1 # ! NOTE modify
+      tensor_parallel_size: 2 # ! NOTE modify
       # These values are conservative starting points
       # They will be overridden during parameter sweeping
-      gpu_memory_utilization: 0.85 # ! NOTE modify
+      gpu_memory_utilization: 0.9 # ! NOTE modify
       max_model_len: 8192 # ! NOTE modify
       dtype: auto # let vLLM auto-detect optimal dtype
       max_num_seqs: 1 # ! NOTE modify
       enable_prefix_caching: true
-      enforce_eager: true
+      # enforce_eager: true
 
 agent_definitions:
 - agent_id: spkr_000

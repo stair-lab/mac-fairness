@@ -43,8 +43,9 @@ hf auth login --token "$HF_TOKEN"  # skipping for now --add-to-git-credential
 
 models=(
     # === Google Gemma (newest first) ===
-    "google/gemma-3-4b-it"
-    "google/gemma-3-1b-it"
+    "google/gemma-2-27b-it"
+    "google/gemma-2-9b-it"
+    "google/gemma-2-2b-it"
 
     # === Meta Llama (newest first) ===
     "meta-llama/Llama-3.3-70B-Instruct"
