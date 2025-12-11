@@ -322,7 +322,7 @@ def collect_results(
         results.append(
             {
                 "experiment": exp_name,
-                "max_num_seqs": vllm_cfg.get("max_num_seqs", "N/A"),
+                "max_num_seqs": vllm_cfg.get("max_num_seqs_upper_bound", "N/A"),
                 "gpu_memory_util": vllm_cfg.get("gpu_memory_utilization", "N/A"),
                 "max_model_len": vllm_cfg.get("max_model_len", "N/A"),
                 "questions": proc.get("questions_attempted", 0),
@@ -420,7 +420,7 @@ def main():
     parser.add_argument(
         "--sweep",
         nargs="+",
-        choices=["max_num_seqs", "gpu_memory_utilization", "max_model_len"],
+        choices=["max_num_seqs_upper_bound", "gpu_memory_utilization", "max_model_len"],
         help="Parameters to sweep",
     )
 
@@ -518,7 +518,7 @@ def main():
     param_ranges: Dict[str, List[Any]] = {}
 
     if args.max_num_seqs:
-        param_ranges["max_num_seqs"] = args.max_num_seqs
+        param_ranges["max_num_seqs_upper_bound"] = args.max_num_seqs
     if args.gpu_memory_util:
         param_ranges["gpu_memory_utilization"] = args.gpu_memory_util
     if args.max_model_len:
@@ -538,8 +538,8 @@ def main():
             "--gpu-memory-util, --max-model-len, or --sweep with --values"
         )
 
-    # Calculate questions count: 2x the max max_num_seqs value
-    max_num_seqs_values = param_ranges.get("max_num_seqs", [32])
+    # Calculate questions count: 2x the max max_num_seqs_upper_bound value
+    max_num_seqs_values = param_ranges.get("max_num_seqs_upper_bound", [32])
     questions_count = max(max_num_seqs_values) * 2
 
     # Cap by available questions in the dataset

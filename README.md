@@ -139,7 +139,6 @@ $MAC_FAIRNESS_WORKSPACE/
 │   ├── run_experiment.py                   # Run full experiment (all questions)
 │   ├── cluster/                            # Cluster/Slurm utilities
 │   │   ├── submit_slurm.sh                 # Submit to Slurm (creates config snapshot)
-│   │   ├── vllm_param_sweep.py             # Parameter sweep execution
 │   │   ├── download_models.sh              # Model downloading utilities
 │   │   └── build_flashinfer.sh             # FlashInfer build script
 │   └── formatter/                          # Benchmark data formatter
@@ -233,7 +232,7 @@ model_definitions:
       gpu_memory_utilization: 0.9
       max_model_len: 4096
       dtype: auto
-      max_num_seqs: 256
+      max_num_seqs_upper_bound: 256  # actual value limited by KV cache
       enable_prefix_caching: true
 
 # Agent definitions

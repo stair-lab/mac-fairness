@@ -16,6 +16,7 @@ from src.utils import (
     MetricsCollector,
     ProjectRootError,
     TranscriptManager,
+    info_print,
     is_live_status_enabled,
 )
 
@@ -24,7 +25,7 @@ class ConversationOrchestrator:
     """Orchestrates multi-agent conversations with async execution.
 
     All conversations run in parallel. Backend handles request queuing:
-    - vLLM: Batches via max_num_seqs in vllm_config
+    - vLLM: Batches via max_num_seqs_upper_bound (effective value limited by KV cache)
     - Ollama: Internal request queue (no true batching)
     """
 
@@ -85,14 +86,14 @@ class ConversationOrchestrator:
         agent_defs = self.config["agent_definitions"]
 
         self.model_factory = ModelFactory(self.config)
-        print("✓ Model factory initialized")
+        info_print("Model factory initialized")
 
         for agent_config in agent_defs:
             agent_id = agent_config["agent_id"]
             agent = self.model_factory.create_agent(agent_config)
             self.agents[agent_id] = agent
             agent_type = type(agent).__name__
-            print(f"  ✓ Created agent: {agent_id} ({agent_type})")
+            info_print(f"Created agent: {agent_id} ({agent_type})")
 
     def initialize_router(self):
         """Initialize routing strategy."""
@@ -104,7 +105,7 @@ class ConversationOrchestrator:
         else:
             raise ValueError(f"Unknown routing strategy: {routing_strategy}")
 
-        print(f"✓ Router initialized: {routing_strategy}")
+        info_print(f"Router initialized: {routing_strategy}")
 
     async def _cleanup_agents(self) -> None:
         """Cleanup all agent resources (sessions, engines, GPU memory)."""
@@ -260,16 +261,24 @@ class ConversationOrchestrator:
         with open(questions_file, "r") as f:
             all_questions = [json.loads(line) for line in f if line.strip()]
 
-        print(f"✓ Loaded {len(all_questions)} questions from {questions_file.name}")
+        info_print(f"Loaded {len(all_questions)} questions from {questions_file.name}")
 
         if question_range:
             start_idx, end_idx = question_range
             questions = all_questions[start_idx:end_idx]
-            print(
-                f"  Processing range {start_idx}-{end_idx} ({len(questions)} questions)"
+            info_print(
+                f"Processing range {start_idx}-{end_idx} ({len(questions)} questions)"
             )
         else:
             questions = all_questions
+
+        # Get effective backend config from vLLM agent (if available)
+        # This includes actual max_num_seqs computed from KV cache availability
+        effective_backend_config = None
+        for agent in self.agents.values():
+            if hasattr(agent, "get_effective_backend_config"):
+                effective_backend_config = agent.get_effective_backend_config()
+                break
 
         # Create request scheduler (reads max_num_seqs per-model from config)
         scheduler = RequestScheduler(
@@ -280,13 +289,14 @@ class ConversationOrchestrator:
             transcript_manager=self.transcript_manager,
             snapshot_path=self.snapshot_path,
             submission_timestamp=self.submission_timestamp,
+            effective_backend_config=effective_backend_config,
         )
         # Print per-model scheduling info
         model_info = ", ".join(
             f"{m}:{scheduler.model_max_num_seqs[m]}"
             for m in sorted(scheduler.model_max_num_seqs.keys())
         )
-        print(f"✓ Request scheduler initialized (per-model max_num_seqs: {model_info})")
+        info_print(f"Request scheduler initialized (per-model effective max_num_seqs: {model_info})")
 
         # Process questions with progress tracking
         # Save transcripts immediately as they complete (crash-safe)
@@ -337,9 +347,9 @@ class ConversationOrchestrator:
 
             # Only print progress if live status display is not enabled
             if not is_live_status_enabled():
-                print(f"[{completed}/{total}] Question {question_id}: {status}")
+                info_print(f"[{completed}/{total}] Question {question_id}: {status}", prefix=False)
 
-        print(f"\nProcessing {len(questions)} questions...")
+        info_print(f"Processing {len(questions)} questions...", prefix=False)
 
         # Run all questions with request-level scheduling
         await scheduler.run_questions(
@@ -373,25 +383,26 @@ class ConversationOrchestrator:
         )
 
         # Print summary
-        print(f"\n{'=' * 60}")
-        print("EXPERIMENT COMPLETE")
-        print(f"{'=' * 60}")
-        print(f"Total questions: {len(questions)}")
-        print(f"Succeeded: {questions_succeeded}")
-        print(f"Partial: {questions_partial}")
-        print(f"Failed: {questions_failed}")
+        info_print(f"\n{'=' * 60}", prefix=False)
+        info_print("EXPERIMENT COMPLETE", prefix=False)
+        info_print(f"{'=' * 60}", prefix=False)
+        info_print(f"Total questions: {len(questions)}", prefix=False)
+        info_print(f"Succeeded: {questions_succeeded}", prefix=False)
+        info_print(f"Partial: {questions_partial}", prefix=False)
+        info_print(f"Failed: {questions_failed}", prefix=False)
         if len(questions) > 0:
-            print(f"Success rate: {questions_succeeded / len(questions) * 100:.1f}%")
+            info_print(f"Success rate: {questions_succeeded / len(questions) * 100:.1f}%", prefix=False)
         else:
-            print("Success rate: N/A (no questions processed)")
-        print(f"Duration: {(end_time - start_time).total_seconds():.1f}s")
+            info_print("Success rate: N/A (no questions processed)", prefix=False)
+        info_print(f"Duration: {(end_time - start_time).total_seconds():.1f}s", prefix=False)
         if batching_metrics:
             timing = batching_metrics.get("timing", {})
             concurrency = timing.get("concurrency", {})
-            print(
+            info_print(
                 f"Requests: {batching_metrics.get('total_requests', 0)}, "
                 f"peak concurrent: {concurrency.get('peak_concurrent_requests', 0)}, "
-                f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s"
+                f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s",
+                prefix=False,
             )
 
 
@@ -425,7 +436,7 @@ def main():
                 end = int(parts[1])
                 question_range = (start, end)
             except ValueError:
-                print(f"Invalid range format: {args.range}")
+                info_print(f"Invalid range format: {args.range}")
                 return
 
     # Run experiment

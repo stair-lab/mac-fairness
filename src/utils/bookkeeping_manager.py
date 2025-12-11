@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional
 from collections import Counter
 
 from src.utils.errors import ProjectRootError
-from src.utils.logging import display_path, format_timestamp, is_debug_enabled
+from src.utils.logging import display_path, format_timestamp, info_print, is_debug_enabled
 
 
 class BookkeepingManager:
@@ -66,8 +66,8 @@ class BookkeepingManager:
         job_summary_dir = experiment_dir / "job_summary"
         job_summary_dir.mkdir(parents=True, exist_ok=True)
 
-        print(
-            f"✓ Directories ensured for: {display_path(experiment_dir, self.project_root)}"
+        info_print(
+            f"Directories ensured for: {display_path(experiment_dir, self.project_root)}"
         )
 
         return {
@@ -228,8 +228,8 @@ class BookkeepingManager:
         with open(summary_path, "w") as f:
             json.dump(job_summary, f, indent=2)
 
-        print(
-            f"\n\n✓ Job summary saved: {display_path(summary_path, self.project_root)}"
+        info_print(
+            f"Job summary saved: {display_path(summary_path, self.project_root)}"
         )
         return str(summary_path)
 
@@ -260,11 +260,12 @@ class BookkeepingManager:
                 model_path = model_def.get("model_path")
                 vllm_config = model_def.get("vllm_config", {})
 
-                # Get max_num_seqs: prefer effective (auto-calculated) value
-                max_num_seqs = vllm_config.get("max_num_seqs")
+                # Get max_num_seqs: prefer effective (auto-calculated) value over upper bound
+                max_num_seqs_upper_bound = vllm_config.get("max_num_seqs_upper_bound")
+                max_num_seqs_effective = max_num_seqs_upper_bound
                 if effective_backend_config and model_path in effective_backend_config:
-                    max_num_seqs = effective_backend_config[model_path].get(
-                        "max_num_seqs", max_num_seqs
+                    max_num_seqs_effective = effective_backend_config[model_path].get(
+                        "max_num_seqs", max_num_seqs_upper_bound
                     )
 
                 result[model_id] = {
@@ -273,7 +274,8 @@ class BookkeepingManager:
                     "tensor_parallel_size": vllm_config.get("tensor_parallel_size"),
                     "gpu_memory_utilization": vllm_config.get("gpu_memory_utilization"),
                     "max_model_len": vllm_config.get("max_model_len"),
-                    "max_num_seqs": max_num_seqs,
+                    "max_num_seqs_upper_bound": max_num_seqs_upper_bound,
+                    "max_num_seqs_effective": max_num_seqs_effective,
                     "dtype": vllm_config.get("dtype"),
                     "enable_prefix_caching": vllm_config.get(
                         "enable_prefix_caching", False

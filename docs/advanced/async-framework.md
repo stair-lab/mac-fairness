@@ -99,7 +99,7 @@ In round 0:
 - The async task uses `asyncio.Semaphore` to limit concurrency
 - When the task completes, it decrements `model_in_flight[model]`
 
-**Capacity**: Each model has a semaphore sized to its `max_num_seqs` configuration. This matches vLLM's internal batching capacity.
+**Capacity**: Each model has a semaphore sized to the effective `max_num_seqs` (min of configured upper bound and KV cache capacity). This matches vLLM's internal batching capacity.
 
 ## Priority Ordering
 
@@ -197,35 +197,71 @@ agent_definitions:
 
 ### How the Framework Speeds Things Up
 
-1. **Continuous batching utilization**: By keeping many requests in-flight, vLLM can batch them efficiently on GPU. A single model serving 3 agents across 100 conversations can have up to 300 concurrent requests (limited by `max_num_seqs`).
+1. **Continuous batching utilization**: By keeping many requests in-flight, vLLM can batch them efficiently on GPU. A single model serving 3 agents across 100 conversations can have up to 300 concurrent requests (limited by effective `max_num_seqs`).
 
 2. **Hiding latency**: While GPU generates response for conversation A, prompts for conversations B, C, D are being prepared. This overlaps CPU work with GPU work.
 
 3. **Optimal dispatch**: Priority ordering ensures high-value requests (re-prompts, nearly-complete conversations) get GPU time first.
 
-### Key Configuration: `max_num_seqs`
+### Key Configuration: `max_num_seqs_upper_bound`
 
-This vLLM parameter controls the maximum concurrent sequences:
+This parameter sets the upper bound for maximum concurrent sequences. The effective value may be lower if limited by KV cache availability:
 
 ```yaml
 model_definitions:
   llama31_8b:
     backend: vllm
     vllm_config:
-      max_num_seqs: 256 # Required for vLLM backend
+      max_num_seqs_upper_bound: 256 # Upper bound; effective value limited by KV cache
 ```
 
-The scheduler creates a semaphore sized to this value:
+After vLLM initializes and profiles GPU memory, the scheduler uses:
 
 ```python
-self.model_semaphores[model_name] = asyncio.Semaphore(max_num_seqs)
+effective_max_num_seqs = min(config_upper_bound, kv_cache_capacity)
+self.model_semaphores[model_name] = asyncio.Semaphore(effective_max_num_seqs)
 ```
+
+**How it works**:
+
+- vLLM profiles available KV cache memory at startup
+- KV cache capacity = `num_gpu_blocks * block_size / max_model_len`
+- The scheduler uses `min(upper_bound, kv_cache_capacity)` for semaphore sizing
+- Example: Config says 256, but KV cache only supports 110 → effective value is 110
 
 **Trade-offs**:
 
-- Higher values = more parallelism but more GPU memory pressure
-- Lower values = less memory but potential GPU underutilization
-- Typical range: 64-1024 depending on model size and GPU memory
+- Higher upper bound = more parallelism potential (but actual value capped by hardware)
+- Lower upper bound = artificially limits concurrency below hardware capacity
+- Recommended: Set to 256-512 and let the system auto-calculate effective value
+
+### Other vLLM Configuration: `attention_backend`
+
+Some models (e.g., Gemma 2) require specific attention backends that support features like tanh softcapping:
+
+```yaml
+model_definitions:
+  gemma2_27b:
+    backend: vllm
+    vllm_config:
+      attention_backend: "FLASHINFER"  # Required for Gemma 2
+```
+
+**Available backends** (depends on vLLM build):
+
+- `FLASH_ATTN` - Default Flash Attention (FA2/FA3)
+- `FLASHINFER` - FlashInfer backend (supports softcapping, recommended for Gemma 2)
+- `XFORMERS` - xFormers backend
+- `TRITON_ATTN` - Triton-based attention
+- `FLEX_ATTENTION` - Flex Attention
+
+**When to use**:
+
+- **Gemma 2 models**: Require `FLASHINFER` due to tanh softcapping
+- **Most other models**: Default `FLASH_ATTN` works fine
+- **Fallback**: Try `XFORMERS` if Flash Attention has issues
+
+The backend is set via `VLLM_ATTENTION_BACKEND` environment variable internally.
 
 ## Error Handling and Cleanup
 
@@ -265,7 +301,7 @@ if active_tasks:
 When agents use different models, each model gets its own:
 
 - `AsyncLLMEngine` instance (shared by agents using that model)
-- Semaphore sized to its `max_num_seqs`
+- Semaphore sized to its effective `max_num_seqs`
 - In-flight counter
 
 The pre-departure pool remains unified - dispatch checks if the target model has capacity:

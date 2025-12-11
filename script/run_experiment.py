@@ -5,10 +5,10 @@ This is the main entry point for running experiments locally or on compute clust
 
 Usage:
     # Run full experiment
-    python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml
+    uv run python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml
 
     # Run subset of questions
-    python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml --range 0-10
+    uv run python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml --range 0-10
 
     # Add env var setting
     CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 uv run python ...

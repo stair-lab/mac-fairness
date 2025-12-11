@@ -16,8 +16,10 @@ from vllm import SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 
+from jinja2.exceptions import TemplateError
+
 from .base_agent import BaseAgent
-from src.utils import debug_print
+from src.utils import debug_print, info_print
 from src.utils.errors import (
     VLLMBatchError,
     VLLMEngineNotInitializedError,
@@ -182,6 +184,7 @@ class AsyncVLLMAgent(BaseAgent):
     _engines_started: ClassVar[Dict[str, bool]] = {}
     _tokenizers: ClassVar[Dict[str, Any]] = {}
     _sampling_params_class: ClassVar[Any] = None
+    _no_system_role_models: ClassVar[set] = set()  # Models that don't support system role
 
     # Metrics
     _total_requests: ClassVar[Dict[str, int]] = {}
@@ -193,7 +196,7 @@ class AsyncVLLMAgent(BaseAgent):
         "gpu_memory_utilization": float,
         "max_model_len": int,
         "dtype": str,
-        "max_num_seqs": int,
+        "max_num_seqs_upper_bound": int,  # user-facing config key (actual value limited by KV cache)
         "enable_prefix_caching": bool,
         "swap_space": int,
         "enforce_eager": bool,
@@ -201,6 +204,7 @@ class AsyncVLLMAgent(BaseAgent):
         "gpu_device_ids": list,
         "top_p": float,
         "top_k": int,
+        "attention_backend": str,
     }
 
     def __init__(self, agent_config: Dict[str, Any], model_config: Dict[str, Any]):
@@ -241,9 +245,11 @@ class AsyncVLLMAgent(BaseAgent):
         if max_len is not None and max_len <= 0:
             raise VLLMConfigError(f"max_model_len must be positive, got {max_len}")
 
-        max_seqs = self.vllm_config.get("max_num_seqs")
+        max_seqs = self.vllm_config.get("max_num_seqs_upper_bound")
         if max_seqs is not None and max_seqs <= 0:
-            raise VLLMConfigError(f"max_num_seqs must be positive, got {max_seqs}")
+            raise VLLMConfigError(
+                f"max_num_seqs_upper_bound must be positive, got {max_seqs}"
+            )
 
         tp_size = self.vllm_config.get("tensor_parallel_size")
         if tp_size is not None and tp_size <= 0:
@@ -258,14 +264,14 @@ class AsyncVLLMAgent(BaseAgent):
     def _ensure_engine(self) -> None:
         """Ensure AsyncLLMEngine is initialized for this model."""
         if self.model_path in self._engines:
-            print(f"  ✓ Reusing shared AsyncLLMEngine for {self.agent_id}")
+            info_print(f"Reusing shared AsyncLLMEngine for {self.agent_id}")
             return
 
         self._setup_cuda_env()
 
         AsyncVLLMAgent._sampling_params_class = SamplingParams
 
-        print(f"  ✓ Initializing AsyncLLMEngine for {self.model_path}")
+        info_print(f"Initializing AsyncLLMEngine for {self.model_path}")
 
         engine_args = self._build_engine_args()
         debug_print(f"AsyncEngineArgs: {engine_args}")
@@ -293,7 +299,81 @@ class AsyncVLLMAgent(BaseAgent):
         self._engines_started[self.model_path] = False
         self._total_requests[self.model_path] = 0
 
-        print("  ✓ AsyncLLMEngine initialized successfully")
+        # Extract effective max_num_seqs from vLLM (may be lower than config due to KV cache)
+        effective_max_num_seqs = self._get_effective_max_num_seqs(async_engine)
+        config_max_num_seqs = self.vllm_config.get("max_num_seqs_upper_bound")
+        if effective_max_num_seqs and config_max_num_seqs:
+            if effective_max_num_seqs < config_max_num_seqs:
+                info_print(
+                    f"max_num_seqs: {config_max_num_seqs} (upper bound) → {effective_max_num_seqs} "
+                    f"(effective, limited by KV cache)"
+                )
+
+        info_print("AsyncLLMEngine initialized successfully")
+
+    @staticmethod
+    def _get_effective_max_num_seqs(engine: Any) -> Optional[int]:
+        """Extract effective max_num_seqs from vLLM engine.
+
+        Calculates the actual maximum concurrency based on KV cache availability.
+        This matches vLLM's "Maximum concurrency for X tokens per request: Y.YYx" log.
+
+        Note on tensor parallelism:
+        - cache_config.num_gpu_blocks is already the min across all TP workers
+        - vLLM synchronizes this during KV cache initialization (kv_cache_utils.py)
+        - So this calculation is correct for any tensor_parallel_size
+
+        Args:
+            engine: AsyncLLMEngine instance
+
+        Returns:
+            Effective max_num_seqs (limited by KV cache) or None if not accessible
+        """
+        try:
+            vllm_config = engine.vllm_config
+            scheduler_config = vllm_config.scheduler_config
+            cache_config = vllm_config.cache_config
+            model_config = vllm_config.model_config
+
+            config_max_num_seqs = scheduler_config.max_num_seqs
+            num_gpu_blocks = cache_config.num_gpu_blocks
+            block_size = cache_config.block_size
+            max_model_len = model_config.max_model_len
+
+            if num_gpu_blocks and block_size and max_model_len:
+                # blocks_per_request = ceil(max_model_len / block_size)
+                # kv_cache_capacity = num_gpu_blocks / blocks_per_request
+                # Simplified: num_gpu_blocks * block_size / max_model_len
+                # This matches vLLM's logged "Maximum concurrency" value
+                kv_cache_capacity = int(num_gpu_blocks * block_size / max_model_len)
+                return min(config_max_num_seqs, kv_cache_capacity)
+
+            return config_max_num_seqs
+        except AttributeError:
+            return None
+
+    @classmethod
+    def get_effective_backend_config(cls) -> Dict[str, Dict[str, Any]]:
+        """Get effective backend configuration for all initialized models.
+
+        Returns actual values being used by vLLM (which may differ from config
+        due to KV cache constraints, auto-detection, etc).
+
+        Returns:
+            Dict keyed by model_path with effective config values
+        """
+        result = {}
+        for model_path, engine in cls._engines.items():
+            config: Dict[str, Any] = {"model_path": model_path}
+
+            # Get effective max_num_seqs
+            effective_max_num_seqs = cls._get_effective_max_num_seqs(engine)
+            if effective_max_num_seqs is not None:
+                config["max_num_seqs"] = effective_max_num_seqs
+
+            result[model_path] = config
+
+        return result
 
     def _setup_cuda_env(self) -> None:
         """Setup CUDA environment variables if CUDA_HOME is set."""
@@ -314,8 +394,11 @@ class AsyncVLLMAgent(BaseAgent):
         kwargs["max_model_len"] = self.vllm_config.get("max_model_len", 4096)
         kwargs["dtype"] = self.vllm_config.get("dtype", "auto")
 
+        # Map max_num_seqs_upper_bound to vLLM's max_num_seqs
+        if "max_num_seqs_upper_bound" in self.vllm_config:
+            kwargs["max_num_seqs"] = self.vllm_config["max_num_seqs_upper_bound"]
+
         optional_params = [
-            "max_num_seqs",
             "enable_prefix_caching",
             "swap_space",
             "enforce_eager",
@@ -328,10 +411,18 @@ class AsyncVLLMAgent(BaseAgent):
         if "gpu_device_ids" in self.vllm_config:
             kwargs["tensor_parallel_size"] = len(self.vllm_config["gpu_device_ids"])
 
+        # Set attention backend via environment variable (vLLM uses env var, not engine arg)
+        if "attention_backend" in self.vllm_config:
+            os.environ["VLLM_ATTENTION_BACKEND"] = self.vllm_config["attention_backend"]
+
         return AsyncEngineArgs(**kwargs)
 
     def _build_full_prompt(self, prompt: str, response_format: str) -> str:
-        """Build full prompt with system message and chat template."""
+        """Build full prompt with system message and chat template.
+
+        Handles models that don't support system roles (e.g., Gemma 2) by
+        prepending the system message to the user message.
+        """
         system_prompt = self._build_system_prompt()
 
         user_message = prompt
@@ -341,18 +432,46 @@ class AsyncVLLMAgent(BaseAgent):
                 "Do not include any text outside the JSON object."
             )
 
+        tokenizer = self._tokenizers.get(self.model_path)
+        if tokenizer is None:
+            raise VLLMEngineNotInitializedError()
+
+        # Check if we already know this model doesn't support system role
+        if self.model_path in self._no_system_role_models:
+            combined_user_message = f"{system_prompt}\n\n{user_message}"
+            messages = [{"role": "user", "content": combined_user_message}]
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+
+        # Try with system role first
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
 
-        tokenizer = self._tokenizers.get(self.model_path)
-        if tokenizer is None:
-            raise VLLMEngineNotInitializedError()
-
-        return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        try:
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        except TemplateError as e:
+            # Some models (e.g., Gemma 2) don't support system roles
+            # Fall back to prepending system message to user message
+            if "system role not supported" in str(e).lower():
+                # Cache this model as not supporting system role (log once)
+                self._no_system_role_models.add(self.model_path)
+                info_print(
+                    f"Model {self.model_path} doesn't support system role, "
+                    "prepending to user message"
+                )
+                combined_user_message = f"{system_prompt}\n\n{user_message}"
+                messages_no_system = [
+                    {"role": "user", "content": combined_user_message},
+                ]
+                return tokenizer.apply_chat_template(
+                    messages_no_system, tokenize=False, add_generation_prompt=True
+                )
+            raise
 
     @classmethod
     async def start_engine(cls) -> None:
@@ -363,7 +482,7 @@ class AsyncVLLMAgent(BaseAgent):
         for model_path in cls._engines:
             if not cls._engines_started.get(model_path, False):
                 cls._engines_started[model_path] = True
-                print(f"  ✓ AsyncLLMEngine started for {model_path}")
+                info_print(f"AsyncLLMEngine started for {model_path}")
 
     @classmethod
     async def stop_engine(cls) -> None:
@@ -371,7 +490,7 @@ class AsyncVLLMAgent(BaseAgent):
         for model_path in cls._engines:
             if cls._engines_started.get(model_path, False):
                 cls._engines_started[model_path] = False
-                print(f"  ✓ AsyncLLMEngine stopped for {model_path}")
+                info_print(f"AsyncLLMEngine stopped for {model_path}")
 
     @classmethod
     def get_engine_metrics(cls) -> Optional[Dict[str, Any]]:
@@ -510,14 +629,18 @@ class AsyncVLLMAgent(BaseAgent):
             self._metrics_collector.record(timing)
 
             structured_output = None
+            json_parse_error = None
             if response_format == "json":
-                structured_output = self._parse_json_response(response_text)
+                structured_output, json_parse_error = self._parse_json_response(
+                    response_text
+                )
 
             latency_ms = round((end_time - start_time) * 1000, 2)
 
             return {
                 "text": response_text,
                 "structured_output": structured_output,
+                "json_parse_error": json_parse_error,
                 "tokens_generated": tokens_generated,
                 "tokens_prompt": tokens_prompt,
                 "exceeded_max_tokens": exceeded_max_tokens,
@@ -568,12 +691,13 @@ class AsyncVLLMAgent(BaseAgent):
     def _cleanup_engines(cls) -> None:
         """Internal: clear engine references and free memory."""
         if cls._engines:
-            print(f"  Releasing {len(cls._engines)} engine(s)...")
+            info_print(f"Releasing {len(cls._engines)} engine(s)...")
             cls._engines.clear()
             cls._engines_started.clear()
             cls._tokenizers.clear()
             cls._total_requests.clear()
             cls._metrics_collector.clear()
+            cls._no_system_role_models.clear()
 
         gc.collect()
 
@@ -581,7 +705,7 @@ class AsyncVLLMAgent(BaseAgent):
             import torch
 
             torch.cuda.empty_cache()
-            print("  ✓ GPU memory released")
+            info_print("GPU memory released")
         except ImportError:
             pass
 

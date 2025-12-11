@@ -36,6 +36,8 @@ ERROR_CODE_MESSAGES = {
     "MISSING_STRUCTURED_OUTPUT": "Missing structured output in response",
     "MAX_LENGTH_EXCEEDED": "Response exceeded maximum token limit",
     "MAX_RETRIES_EXCEEDED": "Maximum retry attempts exceeded",
+    "JSON_PARSE_REPAIRED": "JSON parsing required repair",
+    "JSON_PARSE_FAILED": "JSON parsing failed",
 }
 
 

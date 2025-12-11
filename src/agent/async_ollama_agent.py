@@ -240,12 +240,16 @@ class AsyncOllamaAgent(BaseAgent):
         exceeded_max_tokens = tokens_generated >= max_tok
 
         structured_output = None
+        json_parse_error = None
         if response_format == "json":
-            structured_output = self._parse_json_response(response_text)
+            structured_output, json_parse_error = self._parse_json_response(
+                response_text
+            )
 
         return {
             "text": response_text,
             "structured_output": structured_output,
+            "json_parse_error": json_parse_error,
             "tokens_generated": tokens_generated,
             "tokens_prompt": tokens_prompt,
             "generation_time_ms": generation_time_ms,

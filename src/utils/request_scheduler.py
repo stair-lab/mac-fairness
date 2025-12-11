@@ -400,6 +400,7 @@ class RequestScheduler:
         transcript_manager: Any,
         snapshot_path: str,
         submission_timestamp: datetime,
+        effective_backend_config: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         """Initialize the request scheduler.
 
@@ -411,7 +412,11 @@ class RequestScheduler:
             transcript_manager: Transcript manager for building/saving
             snapshot_path: Path to config snapshot
             submission_timestamp: When experiment was submitted
+            effective_backend_config: Optional dict of effective config per model
+                keyed by model_path (includes auto-calculated values like max_num_seqs
+                from vLLM based on actual KV cache availability)
         """
+        self.effective_backend_config = effective_backend_config or {}
         self.agents = agents
         self.router = router
         self.prompt_builder = prompt_builder
@@ -481,7 +486,8 @@ class RequestScheduler:
         """Initialize per-model semaphores based on configuration.
 
         Each model gets its own semaphore sized to its max_num_seqs.
-        For vLLM, max_num_seqs is mandatory in config.
+        For vLLM, max_num_seqs is mandatory in config, but may be overridden
+        by effective_backend_config (actual value from vLLM engine based on KV cache).
         For Ollama, max_num_seqs is optional (defaults to 32, no true batching anyway).
 
         Raises:
@@ -493,15 +499,30 @@ class RequestScheduler:
         for model_name in used_models:
             model_config = self.model_definitions.get(model_name, {})
             backend = model_config.get("backend")
+            model_path = model_config.get("model_path", model_name)
 
             if backend == "vllm":
                 vllm_config = model_config.get("vllm_config")
-                max_num_seqs = vllm_config.get("max_num_seqs")
-                if max_num_seqs is None:
+                config_max_num_seqs = vllm_config.get("max_num_seqs_upper_bound")
+                if config_max_num_seqs is None:
                     raise MissingConfigSectionError(
-                        f"model_definitions.{model_name}.vllm_config.max_num_seqs "
+                        f"model_definitions.{model_name}.vllm_config.max_num_seqs_upper_bound "
                         "(required for vLLM request scheduling)"
                     )
+
+                # Check for effective value from vLLM engine (may be lower due to KV cache)
+                effective_config = self.effective_backend_config.get(model_path, {})
+                effective_max_num_seqs = effective_config.get("max_num_seqs")
+
+                if effective_max_num_seqs and effective_max_num_seqs < config_max_num_seqs:
+                    max_num_seqs = effective_max_num_seqs
+                    _debug_print(
+                        f"Model '{model_name}': using effective max_num_seqs={max_num_seqs} "
+                        f"(config was {config_max_num_seqs}, limited by KV cache)"
+                    )
+                else:
+                    max_num_seqs = config_max_num_seqs
+
             elif backend == "ollama":
                 # Ollama or other backends - optional, default to 32
                 max_num_seqs = model_config.get("max_num_seqs", 32)

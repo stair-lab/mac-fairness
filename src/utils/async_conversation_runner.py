@@ -201,7 +201,7 @@ class AsyncConversationRunner:
         """Run all questions/conversations in parallel.
 
         All conversations run concurrently. Backend handles request queuing:
-        - vLLM: Batches via max_num_seqs
+        - vLLM: Batches via effective max_num_seqs (limited by KV cache)
         - Ollama: Internal queue (no true batching)
 
         Args:
@@ -564,6 +564,12 @@ class AsyncConversationRunner:
 
             # Get structured output
             structured_output = response_data.get("structured_output")
+            json_parse_error = response_data.get("json_parse_error")
+
+            # Track JSON parse errors (both repaired and failed)
+            if json_parse_error:
+                error_collector.add_error(json_parse_error)
+
             if not structured_output:
                 error = MissingStructuredOutputError(
                     agent_id=agent_id,

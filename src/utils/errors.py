@@ -113,6 +113,27 @@ class MissingStructuredOutputError(ValidationError):
         self.error_code = "MISSING_STRUCTURED_OUTPUT"
 
 
+class JSONParseError(ValidationError):
+    """Raised when JSON parsing fails or requires repair."""
+
+    def __init__(
+        self,
+        response_text: str,
+        repaired: bool = False,
+        attempt: Optional[int] = None,
+    ):
+        status = "repaired" if repaired else "failed"
+        super().__init__(
+            message=f"JSON parsing {status}",
+            attempt=attempt,
+            details={
+                "response_text": response_text[:500],  # Truncate long responses
+                "repaired": repaired,
+            },
+        )
+        self.error_code = "JSON_PARSE_REPAIRED" if repaired else "JSON_PARSE_FAILED"
+
+
 # Answer Matching Errors
 class AnswerMatchError(ValidationError):
     """Base class for answer matching errors."""

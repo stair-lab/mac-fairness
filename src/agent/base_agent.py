@@ -3,9 +3,12 @@
 import json
 import re
 from abc import ABC
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+
+from json_repair import repair_json
 
 from src.utils import debug_print
+from src.utils.errors import JSONParseError
 
 
 @runtime_checkable
@@ -141,23 +144,26 @@ class BaseAgent(ABC):
                 f"You are an AI agent assisting a {identity} acting as a {self.role}."
             )
 
-    def _parse_json_response(self, response_text: str) -> Optional[Dict[str, Any]]:
+    def _parse_json_response(
+        self, response_text: str
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[JSONParseError]]:
         """Parse JSON from response text with multiple fallback strategies.
 
         Tries:
         1. Direct JSON parsing
         2. Extract from ```json ... ``` code block
         3. Find any JSON object in text
+        4. Repair malformed JSON using json-repair library
 
         Args:
             response_text: Raw response text from model
 
         Returns:
-            Parsed JSON object or None if parsing fails
+            Tuple of (parsed JSON object or None, JSONParseError if repair was needed or failed)
         """
         # Strategy 1: Direct parsing
         try:
-            return json.loads(response_text)
+            return json.loads(response_text), None
         except json.JSONDecodeError:
             pass
 
@@ -165,7 +171,7 @@ class BaseAgent(ABC):
         json_match = re.search(r"```json\s*(\{.*?\})\s*```", response_text, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1))
+                return json.loads(json_match.group(1)), None
             except json.JSONDecodeError:
                 pass
 
@@ -173,12 +179,21 @@ class BaseAgent(ABC):
         json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(0))
+                return json.loads(json_match.group(0)), None
             except json.JSONDecodeError:
                 pass
 
+        # Strategy 4: Repair malformed JSON using json-repair library
+        try:
+            repaired = repair_json(response_text, return_objects=True)
+            if isinstance(repaired, dict):
+                debug_print(f"Repaired malformed JSON from response:\n{response_text}")
+                return repaired, JSONParseError(response_text, repaired=True)
+        except Exception:
+            pass
+
         debug_print(f"Failed to parse JSON from response:\n{response_text}")
-        return None
+        return None, JSONParseError(response_text, repaired=False)
 
     def __repr__(self) -> str:
         """String representation of agent."""

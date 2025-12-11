@@ -12,7 +12,7 @@ from src.utils.errors import (
     FileNotFoundError_,
 )
 
-from src.utils.logging import display_path
+from src.utils.logging import display_path, info_print
 
 
 class ConfigManager:
@@ -143,7 +143,7 @@ class ConfigManager:
                     "When reveal_presence_mode is false, reveal_persona and reveal_demographics "
                     "must also be false. This creates completely anonymous agents."
                 )
-            print(
+            info_print(
                 "Anonymous mode: reveal_presence_mode=false (no identity information shown)"
             )
 
@@ -189,7 +189,7 @@ class ConfigManager:
         exp_name = exp_meta["experiment_name"]
         identity_keywords = ["as-human", "as-ai", "as-hybrid", "as-anonymous"]
         if not any(keyword in exp_name.lower() for keyword in identity_keywords):
-            print(
+            info_print(
                 f"Warning: Experiment name '{exp_name}' should include one of: "
                 f"{', '.join(identity_keywords)} to indicate identity reveal mode"
             )
@@ -217,7 +217,7 @@ class ConfigManager:
                     actual_type=type(agent["if_as_human"]).__name__,
                 )
 
-        print(f"✓ Configuration validated: {exp_meta['experiment_name']}")
+        info_print(f"Configuration validated: {exp_meta['experiment_name']}")
         return config
 
     def save_snapshot(
@@ -253,5 +253,5 @@ class ConfigManager:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
         relative_path = display_path(snapshot_path, self.project_root)
-        print(f"✓ Config snapshot saved: {relative_path}")
+        info_print(f"Config snapshot saved: {relative_path}")
         return relative_path

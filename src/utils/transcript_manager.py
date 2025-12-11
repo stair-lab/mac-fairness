@@ -12,6 +12,7 @@ from src.utils.logging import (
     aggregate_validation_errors,
     display_path,
     format_timestamp,
+    info_print,
     is_debug_enabled,
     is_live_status_enabled,
 )
@@ -254,8 +255,8 @@ class TranscriptManager:
 
         # Only print if live status display is not enabled
         if not is_live_status_enabled():
-            print(
-                f"✓ Transcript saved: {display_path(transcript_path, self.project_root)}"
+            info_print(
+                f"Transcript saved: {display_path(transcript_path, self.project_root)}"
             )
         return str(transcript_path)
 
