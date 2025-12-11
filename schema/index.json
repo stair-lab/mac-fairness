@@ -1,13 +1,13 @@
 {
   "schema_registry": {
-    "current_version": "2025-11-27",
+    "current_version": "2025-12-10",
     "versions": [
       {
-        "version": "2025-11-27",
-        "release_date": "2025-11-27",
+        "version": "2025-12-10",
+        "release_date": "2025-12-10",
         "description": "Initial protocol version with unified question format and multi-agent conversation schemas",
         "implementation": {
-          "schemas": "2025-11-27/schemas.ts"
+          "schemas": "2025-12-10/schemas.ts"
         },
         "validation": {
           "runtime": "Python-based validation in async_conversation_runner.py",

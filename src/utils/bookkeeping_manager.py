@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional
 from collections import Counter
 
 from src.utils.errors import ProjectRootError
-from src.utils.logging import display_path, format_timestamp
+from src.utils.logging import display_path, format_timestamp, is_debug_enabled
 
 
 class BookkeepingManager:
@@ -120,6 +120,8 @@ class BookkeepingManager:
         exp_meta = config["experiment_metadata"]
         conversation_config = config["conversation_config"]
         retry_config = config.get("retry_config", {})
+        identity_reveal_config = config.get("identity_reveal_config", {})
+        prompt_template_config = config.get("prompt_template_config", {})
         model_definitions = config.get("model_definitions", {})
         agent_defs = config["agent_definitions"]
         benchmark = exp_meta["benchmark_subcategory"]
@@ -166,23 +168,6 @@ class BookkeepingManager:
             "end_time": format_timestamp(end_time),
             "duration_seconds": round(duration_seconds, 3),
             "config_snapshot_path": config_snapshot_path or "",
-            # Conversation configuration
-            "conversation_config": {
-                "routing_strategy": conversation_config["routing_strategy"],
-                "max_rounds": conversation_config["max_rounds"],
-                "agent_count": len(agent_defs),
-            },
-            # Retry configuration
-            "retry_config": {
-                "max_retries": retry_config["max_retries"],
-                "answer_match_threshold": retry_config["answer_match_threshold"],
-                "retry_on_validation_error": retry_config["retry_on_validation_error"],
-                "retry_on_generation_error": retry_config["retry_on_generation_error"],
-            },
-            # Model definitions (includes backend-specific config per model)
-            "model_definitions": self._build_backend_config(
-                model_definitions, effective_backend_config
-            ),
             # Throughput and performance metrics
             "throughput_performance": aggregated_stats.get(
                 "throughput_performance", {}
@@ -196,9 +181,6 @@ class BookkeepingManager:
                 "success_rate": questions_succeeded / questions_total
                 if questions_total > 0
                 else 0,
-                "transcript_uuids": [
-                    stat["transcript_id"] for stat in (per_transcript_stats or [])
-                ],
                 "error_summary": error_summary_structured,
             },
             # Retry statistics
@@ -208,6 +190,28 @@ class BookkeepingManager:
             # Metadata
             "created_at": format_timestamp(datetime.now(timezone.utc)),
         }
+
+        # Add verbose config sections only in debug mode (lighter in production)
+        if is_debug_enabled():
+            job_summary["conversation_config"] = {
+                "routing_strategy": conversation_config["routing_strategy"],
+                "max_rounds": conversation_config["max_rounds"],
+                "agent_count": len(agent_defs),
+            }
+            job_summary["retry_config"] = {
+                "max_retries": retry_config["max_retries"],
+                "answer_match_threshold": retry_config["answer_match_threshold"],
+                "retry_on_validation_error": retry_config["retry_on_validation_error"],
+                "retry_on_generation_error": retry_config["retry_on_generation_error"],
+            }
+            job_summary["identity_reveal_config"] = identity_reveal_config
+            job_summary["prompt_template_config"] = prompt_template_config
+            job_summary["model_definitions"] = self._build_backend_config(
+                model_definitions, effective_backend_config
+            )
+            job_summary["processing_statistics"]["transcript_uuids"] = [
+                stat["transcript_id"] for stat in (per_transcript_stats or [])
+            ]
 
         # Save to file: {timestamp}_{job_task_id}.json
         summary_path = (

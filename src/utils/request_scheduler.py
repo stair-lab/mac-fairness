@@ -257,6 +257,7 @@ class ConversationState:
     token_stats: Any = None  # ConversationTokenStats instance
     validation_errors: List[Dict[str, Any]] = field(default_factory=list)
     is_complete: bool = False
+    is_finalized: bool = False  # Guard against double finalization
     error: Optional[MacFairnessError] = None
     transcript_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     execution_timestamp: datetime = field(
@@ -755,10 +756,14 @@ class RequestScheduler:
                 "response_tokens": last_response_tokens,
             }
 
+            # Debug-only fields: prompt and answer_match_info
+            if is_debug_enabled():
+                metadata["prompt"] = prompt
+                if answer_match_info:
+                    metadata["answer_match_info"] = answer_match_info
+
             if matched_answer_text:
                 metadata["matched_answer_text"] = matched_answer_text
-            if answer_match_info:
-                metadata["answer_match_info"] = answer_match_info
             if error_collector.has_errors():
                 metadata["validation_errors"] = error_collector.get_summary()["errors"]
 
@@ -863,6 +868,8 @@ class RequestScheduler:
             # Handle error - mark conversation as failed
             conv_state.error = result.error
             conv_state.is_complete = True
+            # Add validation errors from the failed request
+            conv_state.validation_errors.extend(result.validation_errors)
             # Remove any queued requests for this failed conversation
             self._remove_conversation_requests(request.conversation_id)
             self._finalize_conversation(conv_state, error=result.error)
@@ -940,7 +947,16 @@ class RequestScheduler:
         conv_state: ConversationState,
         error: Optional[Exception] = None,
     ) -> None:
-        """Finalize a conversation and save transcript."""
+        """Finalize a conversation and save transcript.
+
+        This method is idempotent - calling it multiple times for the same
+        conversation has no effect after the first call.
+        """
+        # Guard against double finalization
+        if conv_state.is_finalized:
+            return
+        conv_state.is_finalized = True
+
         if error:
             # Build error transcript
             error_info = {

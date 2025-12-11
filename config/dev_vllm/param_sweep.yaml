@@ -7,7 +7,7 @@
 experiment_metadata:
   experiment_name: param_sweep_base
   benchmark_subcategory: dev_vllm
-  schema_version: "2025-11-27"
+  schema_version: "2025-12-10"
   questions_file: data/BBQ/bbq_race.jsonl
 
 conversation_config:

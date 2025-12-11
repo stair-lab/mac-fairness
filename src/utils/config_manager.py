@@ -147,6 +147,44 @@ class ConfigManager:
                 "Anonymous mode: reveal_presence_mode=false (no identity information shown)"
             )
 
+        # Validate prompt_template_config (optional section with defaults)
+        prompt_template_config = config.get("prompt_template_config", {})
+        for_participant = prompt_template_config.get("for_participant", {})
+
+        # Validate choice_display_format
+        valid_choice_formats = [
+            "bullet",  # - Choice text
+            "letter_colon", "letter_dot", "letter_paren",  # A: / A. / (A)
+            "arabic_colon", "arabic_dot", "arabic_paren",  # 1: / 1. / (1)
+            "roman_colon", "roman_dot", "roman_paren",  # I: / I. / (I)
+            "none",  # Don't show choices
+        ]
+        choice_format = for_participant.get("choice_display_format", "bullet")
+        if choice_format not in valid_choice_formats:
+            raise InvalidConfigFieldError(
+                field="prompt_template_config.for_participant.choice_display_format",
+                expected_type=f"one of {valid_choice_formats}",
+                actual_type=f"'{choice_format}'",
+            )
+
+        # Validate json_field_order
+        valid_field_orders = ["answer_first", "rationale_first"]
+        field_order = for_participant.get("json_field_order", "answer_first")
+        if field_order not in valid_field_orders:
+            raise InvalidConfigFieldError(
+                field="prompt_template_config.for_participant.json_field_order",
+                expected_type=f"one of {valid_field_orders}",
+                actual_type=f"'{field_order}'",
+            )
+
+        # Store validated/defaulted prompt_template_config back to config
+        config["prompt_template_config"] = {
+            "for_participant": {
+                "choice_display_format": choice_format,
+                "json_field_order": field_order,
+            }
+        }
+
         # Validate experiment naming convention for identity reveal
         exp_name = exp_meta["experiment_name"]
         identity_keywords = ["as-human", "as-ai", "as-hybrid", "as-anonymous"]

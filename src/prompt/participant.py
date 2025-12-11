@@ -3,9 +3,32 @@
 from typing import Dict, List, Optional, Any
 from .base import BasePromptBuilder
 
+# Default prompt template configuration for participants
+DEFAULT_PARTICIPANT_TEMPLATE_CONFIG = {
+    "choice_display_format": "bullet",  # bullet, letter/arabic/roman + colon/dot/paren, none
+    "json_field_order": "answer_first",  # "answer_first", "rationale_first"
+}
+
+# Roman numeral mapping for choice display
+ROMAN_NUMERALS = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+
 
 class ParticipantPromptBuilder(BasePromptBuilder):
     """Prompt builder for participant role agents."""
+
+    def __init__(
+        self, template_config: Optional[Dict[str, Any]] = None
+    ):
+        """Initialize prompt builder with template configuration.
+
+        Args:
+            template_config: Template configuration for participant prompts.
+                Expected keys: choice_display_format, json_field_order
+        """
+        self.template_config = {
+            **DEFAULT_PARTICIPANT_TEMPLATE_CONFIG,
+            **(template_config or {}),
+        }
 
     def build_system_prompt(self, agent_config: Dict[str, Any]) -> str:
         """Build system prompt for participant role.
@@ -157,6 +180,36 @@ class ParticipantPromptBuilder(BasePromptBuilder):
 
         return "".join(sections)
 
+    def _format_choice_line(self, choice: Dict[str, Any], index: int) -> str:
+        """Format a single choice line based on choice_display_format.
+
+        Args:
+            choice: Choice dictionary with 'id' and 'text'
+            index: Zero-based index of the choice
+
+        Returns:
+            Formatted choice line
+        """
+        fmt = self.template_config["choice_display_format"]
+        text = choice["text"]
+        letter = choice["id"]  # A, B, C, etc.
+        arabic = str(index + 1)  # 1, 2, 3, etc.
+        roman = ROMAN_NUMERALS[index] if index < len(ROMAN_NUMERALS) else str(index + 1)
+
+        format_map = {
+            "bullet": f"- {text}",
+            "letter_colon": f"{letter}: {text}",
+            "letter_dot": f"{letter}. {text}",
+            "letter_paren": f"({letter}) {text}",
+            "arabic_colon": f"{arabic}: {text}",
+            "arabic_dot": f"{arabic}. {text}",
+            "arabic_paren": f"({arabic}) {text}",
+            "roman_colon": f"{roman}: {text}",
+            "roman_dot": f"{roman}. {text}",
+            "roman_paren": f"({roman}) {text}",
+        }
+        return format_map.get(fmt, f"- {text}")
+
     def _format_question_only(self, question: Dict[str, Any]) -> str:
         """Format question and choices only (without context).
 
@@ -173,7 +226,9 @@ class ParticipantPromptBuilder(BasePromptBuilder):
 
         # Add choices for multiple choice/binary questions
         question_type = question.get("question_type", "multiple_choice")
-        if question_type in ["binary", "multiple_choice"]:
+        choice_format = self.template_config["choice_display_format"]
+
+        if question_type in ["binary", "multiple_choice"] and choice_format != "none":
             choices = question.get("choices", [])
             # Only show choices with valid IDs (capital letters)
             valid_choices = [
@@ -183,12 +238,8 @@ class ParticipantPromptBuilder(BasePromptBuilder):
             ]
             if valid_choices:
                 parts.append("Choices:")
-                for choice in valid_choices:
-                    # Use "A: Text" format
-                    # parts.append(f"{choice['id']}: {choice['text']}")
-
-                    # Use "Text" format, omitting choice id
-                    parts.append(f"- {choice['text']}")
+                for idx, choice in enumerate(valid_choices):
+                    parts.append(self._format_choice_line(choice, idx))
 
         return "\n".join(parts) + "\n"
 
@@ -299,6 +350,54 @@ class ParticipantPromptBuilder(BasePromptBuilder):
 
         return "\n".join(parts) + "\n"
 
+    def _get_answer_format(self, question: Dict[str, Any]) -> str:
+        """Get answer format description based on question type.
+
+        Args:
+            question: Question dictionary
+
+        Returns:
+            Answer format description string
+        """
+        question_type = question.get("question_type", "multiple_choice")
+        choices = question.get("choices", [])
+
+        if question_type in ["binary", "multiple_choice"]:
+            valid_choices = [
+                c
+                for c in choices
+                if c.get("id") and c["id"].isupper() and c["id"].isalpha()
+            ]
+            if valid_choices:
+                return (
+                    "You must choose one from the following options: "
+                    + " or ".join(f'"{c["text"]}"' for c in valid_choices)
+                )
+            return '"your selected choice"'
+        return "your answer as a string"
+
+    def _format_json_template(self, answer_format: str) -> str:
+        """Format JSON template based on json_field_order config.
+
+        Args:
+            answer_format: The answer format description
+
+        Returns:
+            JSON template string
+        """
+        field_order = self.template_config["json_field_order"]
+
+        if field_order == "answer_first":
+            return f'''{{
+  "answer": {answer_format},
+  "rationale": "Your reasoning behind your answer in clear and concise sentences."
+}}'''
+        else:  # rationale_first
+            return f'''{{
+  "rationale": "Your reasoning behind your answer in clear and concise sentences.",
+  "answer": {answer_format}
+}}'''
+
     def _build_output_instructions(self, question: Dict[str, Any]) -> str:
         """Build instructions for structured JSON output (Round 0).
 
@@ -308,31 +407,11 @@ class ParticipantPromptBuilder(BasePromptBuilder):
         Returns:
             Output format instructions
         """
-        question_type = question.get("question_type", "multiple_choice")
-        choices = question.get("choices", [])
-
-        # Determine valid answer format using full choice text
-        if question_type in ["binary", "multiple_choice"]:
-            valid_choices = [
-                c
-                for c in choices
-                if c.get("id") and c["id"].isupper() and c["id"].isalpha()
-            ]
-            if valid_choices:
-                answer_format = (
-                    "You must choose one from the following options: "
-                    + " or ".join(f'"{c["text"]}"' for c in valid_choices)
-                )
-            else:
-                answer_format = '"your selected choice"'  # Fallback
-        else:
-            answer_format = "your answer as a string"
+        answer_format = self._get_answer_format(question)
+        json_template = self._format_json_template(answer_format)
 
         return f"""Respond with a JSON object in this exact format:
-{{
-  "rationale": "Your reasoning behind your answer in clear and concise sentences.",
-  "answer": {answer_format},
-}}
+{json_template}
 Output ONLY the JSON object, no other text or markdown formatting."""
 
     def _build_output_instructions_with_question(self, question: Dict[str, Any]) -> str:
@@ -344,29 +423,9 @@ Output ONLY the JSON object, no other text or markdown formatting."""
         Returns:
             Output format instructions with question re-asking
         """
-        question_type = question.get("question_type", "multiple_choice")
-        choices = question.get("choices", [])
-
-        # Determine valid answer format using full choice text
-        if question_type in ["binary", "multiple_choice"]:
-            valid_choices = [
-                c
-                for c in choices
-                if c.get("id") and c["id"].isupper() and c["id"].isalpha()
-            ]
-            if valid_choices:
-                answer_format = (
-                    "You must choose one from the following options: "
-                    + " or ".join(f'"{c["text"]}"' for c in valid_choices)
-                )
-            else:
-                answer_format = '"your selected choice"'  # Fallback
-        else:
-            answer_format = "your answer as a string"
+        answer_format = self._get_answer_format(question)
+        json_template = self._format_json_template(answer_format)
 
         return f"""When answering the question, respond with a JSON object in this exact format:
-{{
-  "rationale": "Your reasoning behind your answer in clear and concise sentences.",
-  "answer": {answer_format},
-}}
+{json_template}
 Output ONLY the JSON object, no other text or markdown formatting."""

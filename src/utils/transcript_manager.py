@@ -12,6 +12,8 @@ from src.utils.logging import (
     aggregate_validation_errors,
     display_path,
     format_timestamp,
+    is_debug_enabled,
+    is_live_status_enabled,
 )
 
 
@@ -77,7 +79,7 @@ class TranscriptManager:
         retry_config = config.get("retry_config", {})
         identity_config = config["identity_reveal_config"]
         agent_defs = config["agent_definitions"]
-        schema_version = exp_meta.get("schema_version", "2025-11-27")
+        schema_version = exp_meta["schema_version"]
 
         # Summary metrics
         total_rounds = len(conversation_rounds)
@@ -94,9 +96,9 @@ class TranscriptManager:
                 elif response.get("response_type") == "judge":
                     final_answers[agent_id] = response.get("verdict")
 
-        # Determine consensus (only for success status)
+        # Determine consensus (whenever there are final answers)
         consensus_reached = None
-        if status == "succeeded" and final_answers:
+        if final_answers:
             unique_answers = set(final_answers.values())
             consensus_reached = len(unique_answers) == 1
 
@@ -104,17 +106,54 @@ class TranscriptManager:
         validation_errors_summary = aggregate_validation_errors(all_validation_errors)
 
         # Calculate retry statistics
-        total_retry_attempts = sum(
-            msg["message_metadata"]["retry_count"]
-            for r in conversation_rounds
-            for msg in r["messages"]
+        # Logic: Each validation error represents a failed attempt that was retried, EXCEPT
+        # the final error of a failed request (which exhausted retries without triggering another).
+        #
+        # For successful messages: each error triggered a retry that eventually succeeded
+        # For failed messages: last error didn't trigger a retry (retries exhausted)
+        #
+        # Using all_validation_errors ensures we count retries from ALL messages, including
+        # those in incomplete rounds (e.g., when one agent fails mid-round, other successful
+        # agents' retries in that round are still counted).
+        has_failed_request = error_info and error_info.get("details", {}).get(
+            "validation_errors"
         )
+        total_retry_attempts = len(all_validation_errors) - (1 if has_failed_request else 0)
+        total_retry_attempts = max(0, total_retry_attempts)  # Guard against edge cases
+
+        # Count messages that required retries
+        # From completed rounds: messages with retry_count > 0
         messages_requiring_retries = sum(
             1
             for r in conversation_rounds
             for msg in r["messages"]
             if msg["message_metadata"]["retry_count"] > 0
         )
+
+        # From incomplete rounds: we can't know exact count, but if there are errors
+        # in all_validation_errors that aren't from the failed request, some messages
+        # in incomplete rounds had retries. Count based on errors from successful messages.
+        failed_error_count = (
+            len(error_info.get("details", {}).get("validation_errors", []))
+            if error_info
+            else 0
+        )
+        successful_errors_count = len(all_validation_errors) - failed_error_count
+        completed_round_errors = sum(
+            msg["message_metadata"]["retry_count"]
+            for r in conversation_rounds
+            for msg in r["messages"]
+        )
+        incomplete_round_retries = successful_errors_count - completed_round_errors
+        if incomplete_round_retries > 0:
+            # There were successful messages with retries in incomplete rounds
+            # We conservatively estimate at least 1 message required retries
+            # (could be more, but we don't have per-message breakdown)
+            messages_requiring_retries += 1
+
+        # If there was a fatal error with validation errors, that's one more message requiring retries
+        if has_failed_request:
+            messages_requiring_retries += 1
 
         # Build job_task_id
         slurm_job = os.environ.get("SLURM_JOB_ID")
@@ -126,31 +165,22 @@ class TranscriptManager:
         else:
             job_task_id = "local"
 
+        # Build experiment_metadata (always includes question_id)
+        experiment_metadata = {
+            "experiment_name": exp_meta["experiment_name"],
+            "benchmark_subcategory": exp_meta["benchmark_subcategory"],
+            "config_snapshot_path": snapshot_path,
+            "submission_timestamp": format_timestamp(submission_timestamp),
+            "execution_timestamp": format_timestamp(execution_timestamp),
+            "job_task_id": job_task_id,
+            "question_id": question["question_id"],
+        }
+
         # Build complete transcript
         transcript = {
             "transcript_id": transcript_id,
             "protocol_version": schema_version,
-            "experiment_metadata": {
-                "experiment_name": exp_meta["experiment_name"],
-                "benchmark_subcategory": exp_meta["benchmark_subcategory"],
-                "config_snapshot_path": snapshot_path,
-                "submission_timestamp": format_timestamp(submission_timestamp),
-                "execution_timestamp": format_timestamp(execution_timestamp),
-                "job_task_id": job_task_id,
-            },
-            "question": question,
-            "conversation_config": {
-                "routing_strategy": conversation_config["routing_strategy"],
-                "max_rounds": conversation_config["max_rounds"],
-            },
-            "retry_config": {
-                "max_retries": retry_config["max_retries"],
-                "answer_match_threshold": retry_config["answer_match_threshold"],
-                "retry_on_validation_error": retry_config["retry_on_validation_error"],
-                "retry_on_generation_error": retry_config["retry_on_generation_error"],
-            },
-            "identity_reveal_config": identity_config,
-            "agent_definitions": agent_defs,
+            "experiment_metadata": experiment_metadata,
             "conversation_rounds": conversation_rounds,
             "conversation_summary": {
                 "total_rounds": total_rounds,
@@ -167,6 +197,23 @@ class TranscriptManager:
             },
             "created_at": format_timestamp(datetime.now(timezone.utc)),
         }
+
+        # Debug-only fields: question, conversation_config, retry_config,
+        # identity_reveal_config, agent_definitions
+        if is_debug_enabled():
+            transcript["question"] = question
+            transcript["conversation_config"] = {
+                "routing_strategy": conversation_config["routing_strategy"],
+                "max_rounds": conversation_config["max_rounds"],
+            }
+            transcript["retry_config"] = {
+                "max_retries": retry_config["max_retries"],
+                "answer_match_threshold": retry_config["answer_match_threshold"],
+                "retry_on_validation_error": retry_config["retry_on_validation_error"],
+                "retry_on_generation_error": retry_config["retry_on_generation_error"],
+            }
+            transcript["identity_reveal_config"] = identity_config
+            transcript["agent_definitions"] = agent_defs
 
         # Add error info if conversation failed
         if error_info:
@@ -206,7 +253,7 @@ class TranscriptManager:
             json.dump(transcript, f, indent=2)
 
         # Only print if live status display is not enabled
-        if not os.environ.get("MAC_FAIRNESS_LIVE_STATUS"):
+        if not is_live_status_enabled():
             print(
                 f"✓ Transcript saved: {display_path(transcript_path, self.project_root)}"
             )
@@ -244,6 +291,7 @@ class TranscriptManager:
         exp_meta = config["experiment_metadata"]
         conversation_config = config["conversation_config"]
         identity_config = config["identity_reveal_config"]
+        prompt_template_config = config.get("prompt_template_config", {})
         agent_defs = config["agent_definitions"]
         summary = transcript["conversation_summary"]
 
@@ -282,9 +330,10 @@ class TranscriptManager:
             ],
             "transcript_path": transcript_display,
             "config_snapshot_path": config_snapshot_display,
-            "protocol_version": "2025-11-27",
+            "protocol_version": exp_meta["schema_version"],
             "routing_strategy": conversation_config["routing_strategy"],
             "identity_reveal_config": identity_config,
+            "prompt_template_config": prompt_template_config,
             "n_agents": len(agent_defs),
             "agent_definitions": agent_defs,
             "status": summary["status"],

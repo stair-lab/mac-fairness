@@ -16,6 +16,7 @@ from src.utils import (
     MetricsCollector,
     ProjectRootError,
     TranscriptManager,
+    is_live_status_enabled,
 )
 
 
@@ -60,7 +61,11 @@ class ConversationOrchestrator:
         self.snapshot_path = None
         self.model_factory = None
         self.router = None
-        self.prompt_builder = ParticipantPromptBuilder()
+        # Initialize prompt builder with template config (if provided)
+        participant_template_config = self.config.get(
+            "prompt_template_config", {}
+        ).get("for_participant")
+        self.prompt_builder = ParticipantPromptBuilder(participant_template_config)
         self.submission_timestamp = None
 
     def save_config_snapshot(self) -> str:
@@ -331,7 +336,7 @@ class ConversationOrchestrator:
                     )
 
             # Only print progress if live status display is not enabled
-            if not os.environ.get("MAC_FAIRNESS_LIVE_STATUS"):
+            if not is_live_status_enabled():
                 print(f"[{completed}/{total}] Question {question_id}: {status}")
 
         print(f"\nProcessing {len(questions)} questions...")

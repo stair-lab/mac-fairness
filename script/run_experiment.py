@@ -10,9 +10,13 @@ Usage:
     # Run subset of questions
     python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml --range 0-10
 
+    # Add env var setting
+    CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 uv run python ...
+
+    CUDA_VISIBLE_DEVICES=1 OMP_NUM_THREADS=16 MAC_FAIRNESS_DEBUG_FLAG=1 uv run python ...
+
 Environment Variables:
     MAC_FAIRNESS_WORKSPACE - Project root directory (required)
-    MAC_FAIRNESS_DEBUG_FLAG - Enable debug output for prompts
     MAC_FAIRNESS_EXPERIMENT_ROOT - Override experiment output directory (default: ./experiment)
 """
 

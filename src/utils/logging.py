@@ -46,12 +46,12 @@ ERROR_CODE_MESSAGES = {
 
 def is_debug_enabled() -> bool:
     """Check if debug flag is enabled (checked at runtime)."""
-    return bool(os.environ.get(DEBUG_ENV))
+    return os.environ.get(DEBUG_ENV) == "1"
 
 
 def is_live_status_enabled() -> bool:
     """Check if live status display is enabled (checked at runtime)."""
-    return bool(os.environ.get(LIVE_STATUS_ENV))
+    return os.environ.get(LIVE_STATUS_ENV) == "1"
 
 
 # =============================================================================

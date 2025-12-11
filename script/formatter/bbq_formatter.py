@@ -106,7 +106,7 @@ def format_bbq_to_unified(input_path, output_path, subcategory="race"):
                     # Preserve any additional metadata
                     "additional_metadata": item.get("additional_metadata"),
                 },
-                "schema_version": "2025-11-27",
+                "schema_version": "2025-12-10",
             }
 
             f_out.write(json.dumps(formatted) + "\n")

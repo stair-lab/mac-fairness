@@ -34,7 +34,7 @@ export MAC_FAIRNESS_EXPERIMENT_ROOT="/path/to/save/experiments"
 
 # 4. Run a real experiment locally or submit to Slurm
 # Local execution:
-python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
+python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
 # Slurm submission (creates snapshot at queuing time):
 ./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml
@@ -80,7 +80,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │
 ├── schema/                                 # Protocol schemas (versioned, documentation only)
 │   ├── index.json                          # Schema version registry
-│   └── 2025-11-27/                         # Current protocol version (follows MCP convention)
+│   └── 2025-12-10/                         # Current protocol version (follows MCP convention)
 │       ├── schemas.ts                      # Zod schema definitions (documentation reference)
 │       ├── package.json                    # Node.js dependencies
 │       └── tsconfig.json                   # TypeScript configuration
@@ -195,13 +195,13 @@ $MAC_FAIRNESS_WORKSPACE/
 Each experiment configuration defines the agent setup and routing strategy applied to ALL questions in a benchmark run.
 
 ```yaml
-# config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
+# config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
 # Experiment identification and data source
 experiment_metadata:
-  experiment_name: llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27
+  experiment_name: llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10
   benchmark_subcategory: bbq_race
-  schema_version: "2025-11-27"
+  schema_version: "2025-12-10"
   questions_file: data/BBQ/bbq_race.jsonl
 
 # Conversation orchestration settings
@@ -292,6 +292,42 @@ identity_reveal_config: # All three settings are required
 
 **Special case**: When `reveal_presence_mode: false`, the agent identity is completely hidden.
 
+### Prompt Template Configuration
+
+The `prompt_template_config` controls how prompts are formatted for agents. This is useful for experimenting with different prompt presentations.
+
+```yaml
+prompt_template_config:
+  for_participant:
+    # How to display answer choices in the prompt
+    choice_display_format: bullet # default
+    # Order of fields in the JSON output instructions
+    json_field_order: answer_first # default
+```
+
+**`choice_display_format`** options:
+
+| Format         | Example           |
+| -------------- | ----------------- |
+| `bullet`       | `- Option text`   |
+| `letter_colon` | `A: Option text`  |
+| `letter_dot`   | `A. Option text`  |
+| `letter_paren` | `(A) Option text` |
+| `arabic_colon` | `1: Option text`  |
+| `arabic_dot`   | `1. Option text`  |
+| `arabic_paren` | `(1) Option text` |
+| `roman_colon`  | `I: Option text`  |
+| `roman_dot`    | `I. Option text`  |
+| `roman_paren`  | `(I) Option text` |
+| `none`         | `Option text`     |
+
+**`json_field_order`** options:
+
+- `answer_first`: `{"answer": "A", "rationale": "..."}` (recommended for shorter models)
+- `rationale_first`: `{"rationale": "...", "answer": "A"}`
+
+Placing `answer` first ensures the answer is captured even if the response is truncated.
+
 ### Experiment Naming Convention
 
 All experiments follow a consistent naming scheme:
@@ -300,14 +336,14 @@ All experiments follow a consistent naming scheme:
 
 Examples:
 
-- `gemma2_9b_3agent_as-human-demographics_vanilla_v2025-11-27`
-- `llama31_8b_4agent_as-ai-demographics-persona_vanilla_v2025-11-27`
-- `qwen25_7b_5agent_as-hybrid-persona_vanilla_v2025-11-27`
-- `qwen3_4b_2agent_as-anonymous_vanilla_v2025-11-27`
+- `gemma2_9b_3agent_as-human-demographics_vanilla_v2025-12-10`
+- `llama31_8b_4agent_as-ai-demographics-persona_vanilla_v2025-12-10`
+- `qwen25_7b_5agent_as-hybrid-persona_vanilla_v2025-12-10`
+- `qwen3_4b_2agent_as-anonymous_vanilla_v2025-12-10`
 
 ### Benchmark Data Preparation
 
-The framework requires questions in a unified JSONL format (see `schema/2025-11-27/schemas.ts` for the schema definition).
+The framework requires questions in a unified JSONL format (see `schema/2025-12-10/schemas.ts` for the schema definition).
 
 **Converting benchmarks:**
 
@@ -343,7 +379,7 @@ python script/formatter/discrim_eval_formatter.py \
   ],
   "correct_answer_id": "A",
   "source_metadata": {},
-  "schema_version": "2025-11-27"
+  "schema_version": "2025-12-10"
 }
 ```
 
@@ -355,23 +391,23 @@ python script/formatter/discrim_eval_formatter.py \
 
 ```bash
 # Run locally (snapshot saved at start, then executed immediately)
-python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
+python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
 # Process specific question range (useful for testing)
-python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --range 0-10
+python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml --range 0-10
 ```
 
 ### Slurm Submission
 
 ```bash
 # Submit single job to Slurm (snapshot saved at queuing time)
-./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml
+./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
 # Submit array job (divides questions evenly among tasks)
-./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --array-tasks 20
+./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml --array-tasks 20
 
 # Array job with manual question count
-./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-11-27_scratch.yaml --array-tasks 20 --total-questions 6879
+./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml --array-tasks 20 --total-questions 6879
 ```
 
 **Execution workflow:**

@@ -26,7 +26,7 @@ from src.utils.errors import (
     ErrorCollector,
     MissingConfigSectionError,
 )
-from src.utils.logging import debug_print
+from src.utils.logging import debug_print, is_debug_enabled
 
 
 @dataclass
@@ -615,11 +615,14 @@ class AsyncConversationRunner:
                 "response_tokens": last_response_tokens,
             }
 
+            # Debug-only fields: prompt and answer_match_info
+            if is_debug_enabled():
+                metadata["prompt"] = prompt
+                if answer_match_info:
+                    metadata["answer_match_info"] = answer_match_info
+
             if matched_answer_text:
                 metadata["matched_answer_text"] = matched_answer_text
-
-            if answer_match_info:
-                metadata["answer_match_info"] = answer_match_info
 
             if error_collector.has_errors():
                 metadata["validation_errors"] = error_collector.get_summary()["errors"]
