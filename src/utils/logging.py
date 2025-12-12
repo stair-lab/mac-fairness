@@ -21,15 +21,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-# Environment variable names
+# Environment variable names (exported for use by other modules)
 DEBUG_ENV = "MAC_FAIRNESS_DEBUG_FLAG"
 LIVE_STATUS_ENV = "MAC_FAIRNESS_LIVE_STATUS"
 WORKSPACE_ENV = "MAC_FAIRNESS_WORKSPACE"
 EXPERIMENT_ROOT_ENV = "MAC_FAIRNESS_EXPERIMENT_ROOT"
 
 # Display names for path substitution
-_WORKSPACE_VAR = "$MAC_FAIRNESS_WORKSPACE"
-_EXPERIMENT_ROOT_VAR = "$MAC_FAIRNESS_EXPERIMENT_ROOT"
+WORKSPACE_VAR = "$MAC_FAIRNESS_WORKSPACE"
+EXPERIMENT_ROOT_VAR = "$MAC_FAIRNESS_EXPERIMENT_ROOT"
+
+# Keep private aliases for backwards compatibility within this module
+_WORKSPACE_VAR = WORKSPACE_VAR
+_EXPERIMENT_ROOT_VAR = EXPERIMENT_ROOT_VAR
 
 # Shared error code to user-friendly message mapping
 ERROR_CODE_MESSAGES = {
@@ -221,6 +225,27 @@ def format_timestamp(dt: datetime) -> str:
         dt = dt.astimezone(timezone.utc)
 
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def format_filename_timestamp(dt: datetime) -> str:
+    """Format a datetime for use in filenames with millisecond precision.
+
+    Uses a filesystem-safe format without colons, with millisecond precision
+    to avoid collisions when multiple jobs start within the same second.
+
+    Args:
+        dt: Datetime object (timezone-aware or naive, assumed UTC if naive)
+
+    Returns:
+        Filename-safe timestamp like "20251204T120000.123Z"
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    # Format: YYYYMMDDTHHMMss.mmmZ (millisecond precision)
+    return dt.strftime("%Y%m%dT%H%M%S") + f".{dt.microsecond // 1000:03d}Z"
 
 
 def display_path(

@@ -34,16 +34,14 @@ export MAC_FAIRNESS_EXPERIMENT_ROOT="/path/to/save/experiments"
 
 # 4. Run a real experiment locally or submit to Slurm
 # Local execution:
-python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+[ENV_VARS] python script/run_experiment.py config/bbq_race/llama33_70b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+# e.g., CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 python ...
 
 # Slurm submission (creates snapshot at queuing time):
 ./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml
 
 # Slurm array job (divides questions evenly among tasks):
 ./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20
-
-# Slurm array job with manual question count:
-./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20 --total-questions 6879
 
 # 5. Query results
 # TODO
@@ -72,7 +70,7 @@ uv pip install -e .
 | ------------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
 | `MAC_FAIRNESS_WORKSPACE`       | Yes      | Project root directory                                                                             |
 | `MAC_FAIRNESS_EXPERIMENT_ROOT` | No       | Override experiment output directory (defaults to `$MAC_FAIRNESS_WORKSPACE/experiment`)            |
-| `MAC_FAIRNESS_DEBUG_FLAG`      | No       | Set to `1` to enable debug output AND more verbose transcript recording in which prompts are saved |
+| `MAC_FAIRNESS_DEBUG_FLAG`      | No       | Set to `1` to enable debug output AND to record more verbose transcripts (e.g., prompts are saved) |
 | `MAC_FAIRNESS_LIVE_STATUS`     | No       | Set to `1` to enable live status display                                                           |
 | `CUDA_VISIBLE_DEVICES`         | No       | Specify which GPUs to use (e.g., `0`, `1` or `2,5`)                                                |
 | `OMP_NUM_THREADS`              | No       | Set OpenMP thread count to avoid CPU oversubscription (e.g., `8`)                                  |
@@ -109,6 +107,8 @@ $MAC_FAIRNESS_WORKSPACE/
 │       └── {experiment_name}/
 │           ├── transcript/                 # Conversation transcripts (one per question)
 │           │   └── {uuid}.json
+│           ├── job_manifest/               # Job manifests for interrupted run recovery
+│           │   └── {timestamp}_{job_task_id}.json
 │           └── job_summary/                # Job execution summaries (one per job run)
 │               └── {timestamp}_{job_task_id}.json
 │
@@ -150,6 +150,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │
 ├── script/                                 # Executable scripts
 │   ├── run_experiment.py                   # Run full experiment (all questions)
+│   ├── repair.py                           # Analyze and resume interrupted runs
 │   ├── cluster/                            # Cluster/Slurm utilities
 │   │   ├── submit_slurm.sh                 # Submit to Slurm (creates config snapshot)
 │   │   ├── download_models.sh              # Model downloading utilities
@@ -161,6 +162,7 @@ $MAC_FAIRNESS_WORKSPACE/
     ├── advanced/                           # Advanced topics (detailed guides)
     │   ├── async-framework.md              # Async scheduling and GPU utilization
     │   ├── error-handling.md               # Error handling and recovery mechanisms
+    │   ├── job-recovery.md                 # Job manifests and resuming interrupted runs
     │   └── prompt-templates.md             # Prompt engineering and template design
     └── guide/
         └── dev_ollama_walkthrough.ipynb    # Local development testing with Ollama (no GPU required)
@@ -446,10 +448,10 @@ python script/formatter/discrim_eval_formatter.py \
 
 ```bash
 # Run locally (snapshot saved at start, then executed immediately)
-python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+[ENV_VARS] python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
 # Process specific question range (useful for dev_ testing)
-python script/run_experiment.py config/dev_vllm/llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10_scratch.yaml --range 0-10
+[ENV_VARS] python script/run_experiment.py config/dev_vllm/llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10_scratch.yaml --range 0-10
 ```
 
 ### Slurm Submission
@@ -483,6 +485,25 @@ python script/run_experiment.py config/dev_vllm/llama33_70b_3agent_as-hybrid-dem
 ---
 
 ## 6. Output Structure
+
+### Job Manifests
+
+Job manifests track question processing status for interrupted run recovery:
+
+- Created at job start with all planned questions (status: `null`)
+- Updated as each question completes (status: `"succeeded"`)
+- **Deleted automatically** when all questions succeed
+- **Persists** if any questions have null status (e.g., interrupted job, partial/failed conversations)
+
+To resume an interrupted run:
+
+```bash
+# Analyze the manifest (no GPU required)
+python script/repair.py analyze experiment/{benchmark}/{experiment}/job_manifest/{manifest}.json
+
+# Resume null questions
+[ENV_VARS] python script/repair.py resume experiment/{benchmark}/{experiment}/job_manifest/{manifest}.json
+```
 
 ### Transcripts
 
@@ -543,6 +564,7 @@ For detailed information on advanced features and internals, see:
 
 - **[Async Framework Architecture](docs/advanced/async-framework.md)**: Three-pool request scheduling, priority ordering, parallelism model, vLLM continuous batching integration, multi-model support
 - **[Error Handling and Recovery](docs/advanced/error-handling.md)**: Error class hierarchy, recording levels (message/transcript/job-summary), automatic recovery mechanisms, retry logic, graceful degradation
+- **[Job Recovery](docs/advanced/job-recovery.md)**: Job manifests, analyzing interrupted runs, resuming null questions, the repair.py script
 - **[Prompt Templates](docs/advanced/prompt-templates.md)**: Round-based prompt structure, key design decisions, response processing, answer matching, identity display generation, extending to other roles
 
 **Additional topics covered in advanced docs:**

@@ -12,7 +12,7 @@ from src.utils.errors import (
     FileNotFoundError_,
 )
 
-from src.utils.logging import display_path, info_print
+from src.utils.logging import display_path, format_filename_timestamp, info_print
 
 
 class ConfigManager:
@@ -232,7 +232,8 @@ class ConfigManager:
         Returns:
             Path to the saved snapshot file
         """
-        timestamp = submission_timestamp.strftime("%Y%m%dT%H%M%SZ")
+        # Use millisecond precision to avoid collisions
+        timestamp = format_filename_timestamp(submission_timestamp)
 
         exp_meta = config["experiment_metadata"]
         benchmark = exp_meta["benchmark_subcategory"]

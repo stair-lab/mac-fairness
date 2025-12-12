@@ -5,7 +5,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Set, Tuple
 
 from src.agent import ModelFactory
 from src.routing import VanillaRouter
@@ -13,6 +13,7 @@ from src.prompt.participant import ParticipantPromptBuilder
 from src.utils import (
     BookkeepingManager,
     ConfigManager,
+    ConfigurationError,
     MetricsCollector,
     ProjectRootError,
     TranscriptManager,
@@ -21,6 +22,7 @@ from src.utils import (
     get_gpu_info,
     format_gpu_info,
 )
+from src.utils.bookkeeping_manager import StreamingJobSummary
 
 
 class ConversationOrchestrator:
@@ -70,6 +72,7 @@ class ConversationOrchestrator:
         ).get("for_participant")
         self.prompt_builder = ParticipantPromptBuilder(participant_template_config)
         self.submission_timestamp = None
+        self.manifest_path: Optional[Path] = None
 
     def save_config_snapshot(self) -> str:
         """Save a snapshot of the configuration.
@@ -220,6 +223,7 @@ class ConversationOrchestrator:
     async def run_experiment(
         self,
         question_range: Optional[Tuple[int, int]] = None,
+        question_ids: Optional[Set[str]] = None,
     ):
         """Run experiment with async parallel conversation processing.
 
@@ -228,6 +232,7 @@ class ConversationOrchestrator:
 
         Args:
             question_range: Optional tuple of (start_idx, end_idx) for question subset
+            question_ids: Optional set of question IDs to process (for resume)
         """
         start_time = datetime.now(timezone.utc)
 
@@ -241,6 +246,7 @@ class ConversationOrchestrator:
         try:
             await self._run_experiment_inner(
                 question_range=question_range,
+                question_ids=question_ids,
                 start_time=start_time,
             )
         finally:
@@ -249,6 +255,7 @@ class ConversationOrchestrator:
     async def _run_experiment_inner(
         self,
         question_range: Optional[Tuple[int, int]],
+        question_ids: Optional[Set[str]],
         start_time: datetime,
     ):
         """Inner experiment logic wrapped for cleanup."""
@@ -265,14 +272,38 @@ class ConversationOrchestrator:
 
         info_print(f"Loaded {len(all_questions)} questions from {questions_file.name}")
 
+        if question_range and question_ids:
+            raise ConfigurationError("Cannot specify both question_range and question_ids")
+
         if question_range:
             start_idx, end_idx = question_range
             questions = all_questions[start_idx:end_idx]
             info_print(
                 f"Processing range {start_idx}-{end_idx} ({len(questions)} questions)"
             )
+        elif question_ids:
+            questions = [q for q in all_questions if q.get("question_id") in question_ids]
+            info_print(f"Processing {len(questions)} questions by ID filter")
         else:
             questions = all_questions
+
+        # Save job manifest (pre-registration of planned questions for recovery)
+        # Each question starts with status=null, marked "succeeded" when complete
+        self.manifest_path = self.bookkeeping.save_job_manifest(
+            config=self.config,
+            questions=questions,
+            submission_timestamp=self.submission_timestamp,
+            config_snapshot_path=self.snapshot_path,
+        )
+
+        # Initialize streaming job summary (updates in real-time as transcripts complete)
+        streaming_summary = StreamingJobSummary(
+            config=self.config,
+            questions_total=len(questions),
+            start_time=start_time,
+            config_snapshot_path=self.snapshot_path,
+            project_root=self.project_root,
+        )
 
         # Get effective backend config from vLLM agent (if available)
         # This includes actual max_num_seqs computed from KV cache availability
@@ -302,17 +333,13 @@ class ConversationOrchestrator:
 
         # Process questions with progress tracking
         # Save transcripts immediately as they complete (crash-safe)
-        questions_succeeded = 0
-        questions_partial = 0
-        questions_failed = 0
-        error_summary = []
-        per_transcript_stats = []
+        # Streaming summary updates in real-time
+        per_transcript_stats: List[Dict[str, Any]] = []
+        error_summary: List[Dict[str, Any]] = []
 
         def progress_callback(
             completed: int, total: int, question_idx: int, transcript: Dict[str, Any]
         ):
-            nonlocal questions_succeeded, questions_partial, questions_failed
-
             question = questions[question_idx]
             question_id = question.get("question_id", f"q_{question_idx}")
 
@@ -324,28 +351,21 @@ class ConversationOrchestrator:
             transcript_stat = self._extract_transcript_stats(transcript, question_id)
             per_transcript_stats.append(transcript_stat)
 
-            # Update counters
+            # Get error info if present
             status = transcript.get("conversation_summary", {}).get("status", "failed")
-            if status == "succeeded":
-                questions_succeeded += 1
-            elif status == "partial":
-                questions_partial += 1
-                error_info = transcript.get("conversation_summary", {}).get(
-                    "error_info"
-                )
+            error_info = None
+            if status in ("partial", "failed"):
+                error_info = transcript.get("conversation_summary", {}).get("error_info")
                 if error_info:
-                    error_summary.append(
-                        {"question_id": question_id, "error": error_info}
-                    )
-            else:
-                questions_failed += 1
-                error_info = transcript.get("conversation_summary", {}).get(
-                    "error_info"
-                )
-                if error_info:
-                    error_summary.append(
-                        {"question_id": question_id, "error": error_info}
-                    )
+                    error_summary.append({"question_id": question_id, "error": error_info})
+
+            # Update streaming summary (writes to disk)
+            streaming_summary.record_completion(transcript_stat, error_info)
+
+            # Mark question as processed in manifest (tracks progress and success status)
+            self.bookkeeping.mark_question_processed(
+                self.manifest_path, question_id, succeeded=(status == "succeeded")
+            )
 
             # Only print progress if live status display is not enabled
             if not is_live_status_enabled():
@@ -365,14 +385,14 @@ class ConversationOrchestrator:
         # Get effective backend config (includes auto-calculated max_num_seqs)
         effective_backend_config = AsyncVLLMAgent.get_effective_config()
 
-        # Save job summary
+        # Finalize job summary
         end_time = datetime.now(timezone.utc)
         self.bookkeeping.save_job_summary(
             config=self.config,
             questions_total=len(questions),
-            questions_succeeded=questions_succeeded,
-            questions_partial=questions_partial,
-            questions_failed=questions_failed,
+            questions_succeeded=streaming_summary.questions_succeeded,
+            questions_partial=streaming_summary.questions_partial,
+            questions_failed=streaming_summary.questions_failed,
             start_time=start_time,
             end_time=end_time,
             question_range=question_range,
@@ -383,6 +403,9 @@ class ConversationOrchestrator:
             if effective_backend_config
             else None,
         )
+
+        # Delete manifest if all questions succeeded, otherwise keep for resume
+        manifest_deleted = self.bookkeeping.delete_manifest_if_complete(self.manifest_path)
 
         # Print summary
         print(f"\n{'=' * 60}")
@@ -437,13 +460,14 @@ class ConversationOrchestrator:
 
         print(f"{'=' * 60}")
         print(f"Total questions: {len(questions)}")
-        print(f"Succeeded: {questions_succeeded}")
-        print(f"Partial: {questions_partial}")
-        print(f"Failed: {questions_failed}")
-        if len(questions) > 0:
-            print(f"Success rate: {questions_succeeded / len(questions) * 100:.1f}%")
+        print(f"Succeeded: {streaming_summary.questions_succeeded}")
+        print(f"Partial: {streaming_summary.questions_partial}")
+        print(f"Failed: {streaming_summary.questions_failed}")
+        total_completed = streaming_summary.questions_succeeded + streaming_summary.questions_partial + streaming_summary.questions_failed
+        if total_completed > 0:
+            print(f"Success rate: {streaming_summary.questions_succeeded / total_completed * 100:.1f}%")
         else:
-            print("Success rate: N/A (no questions processed)")
+            print("Success rate: N/A (no questions completed)")
         print(f"Duration: {(end_time - start_time).total_seconds():.1f}s")
         if batching_metrics:
             timing = batching_metrics.get("timing", {})
@@ -453,6 +477,9 @@ class ConversationOrchestrator:
                 f"peak concurrent: {concurrency.get('peak_concurrent_requests', 0)}, "
                 f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s"
             )
+        if not manifest_deleted:
+            print(f"\nSome questions need repair. To resume:")
+            print(f"  python script/repair.py resume {self.manifest_path}")
         print()  # Trailing newline
 
 

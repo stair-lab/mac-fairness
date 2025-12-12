@@ -21,6 +21,7 @@ Environment Variables:
 """
 
 import argparse
+import asyncio
 import os
 import signal
 import sys
@@ -35,9 +36,6 @@ sys.path.insert(0, str(project_root))
 
 from src.utils import debug_print, is_debug_enabled
 from src.utils.conversation_orchestrator import ConversationOrchestrator
-
-# Track if we've been asked to stop
-_shutdown_requested = False
 
 
 def parse_range(range_str: str) -> Tuple[int, int]:
@@ -154,21 +152,20 @@ def cleanup_resources(backend: str) -> None:
 
 
 def signal_handler(signum: int, _frame) -> None:
-    """Handle shutdown signals gracefully.
+    """Handle shutdown signals - immediate exit on first signal.
+
+    Treats shutdown as a disaster scenario: exit immediately, rely on
+    persistent storage (manifest, transcripts already saved) for recovery.
 
     Args:
         signum: Signal number
         _frame: Current stack frame (unused)
     """
-    global _shutdown_requested
     sig_name = signal.Signals(signum).name
-    if _shutdown_requested:
-        print(f"\n\n✗ Forced shutdown ({sig_name})")
-        sys.exit(128 + signum)
-    else:
-        _shutdown_requested = True
-        print(f"\n\n✗ Received {sig_name}, finishing current question...")
-        print("  (Press Ctrl+C again to force quit)")
+    print(f"\n\n✗ Received {sig_name}, exiting immediately...")
+    print("  (Completed transcripts saved, manifest preserved for resume)")
+    # Exit immediately - no graceful shutdown, just stop
+    sys.exit(128 + signum)
 
 
 def main() -> int:
@@ -249,8 +246,6 @@ Environment Variables:
         )
 
         # Run experiment (async)
-        import asyncio
-
         orchestrator = ConversationOrchestrator(str(config_path))
         asyncio.run(orchestrator.run_experiment(question_range=question_range))
 

@@ -1,14 +1,64 @@
 """Bookkeeping and record management utilities."""
 
+import fcntl
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TextIO
 from collections import Counter
 
 from src.utils.errors import ProjectRootError
-from src.utils.logging import display_path, format_timestamp, info_print, is_debug_enabled
+from src.utils.logging import (
+    EXPERIMENT_ROOT_ENV,
+    display_path,
+    format_filename_timestamp,
+    format_timestamp,
+    info_print,
+    is_debug_enabled,
+)
+
+
+def get_array_job_id() -> str:
+    """Get unique job ID for SLURM array jobs.
+
+    For array jobs, uses SLURM_ARRAY_JOB_ID (shared across all tasks).
+    For non-array jobs, uses SLURM_JOB_ID.
+    For local runs, returns "local".
+
+    Returns:
+        Unique job identifier for the array job (not per-task)
+    """
+    # SLURM_ARRAY_JOB_ID is the parent job ID shared by all array tasks
+    array_job_id = os.environ.get("SLURM_ARRAY_JOB_ID")
+    if array_job_id:
+        return array_job_id
+
+    # Non-array SLURM job
+    slurm_job = os.environ.get("SLURM_JOB_ID")
+    if slurm_job:
+        return slurm_job
+
+    return "local"
+
+
+def get_job_task_id() -> str:
+    """Get job-task identifier for per-task tracking.
+
+    For array jobs: "{SLURM_JOB_ID}_{SLURM_ARRAY_TASK_ID}"
+    For non-array jobs: "{SLURM_JOB_ID}"
+    For local runs: "local"
+
+    Returns:
+        Job-task identifier string
+    """
+    slurm_job = os.environ.get("SLURM_JOB_ID")
+    slurm_task = os.environ.get("SLURM_ARRAY_TASK_ID")
+    if slurm_job and slurm_task:
+        return f"{slurm_job}_{slurm_task}"
+    elif slurm_job:
+        return slurm_job
+    return "local"
 
 
 class BookkeepingManager:
@@ -41,7 +91,7 @@ class BookkeepingManager:
         Returns:
             Dictionary of created directory paths
         """
-        exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
         # Make exp_root absolute if not already
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
@@ -112,7 +162,7 @@ class BookkeepingManager:
         Returns:
             Path to the saved job summary file
         """
-        exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root
@@ -138,7 +188,7 @@ class BookkeepingManager:
             job_task_id = "local"
 
         # Filename: {timestamp}_{job_task_id}.json
-        timestamp_str = start_time.strftime("%Y%m%dT%H%M%SZ")
+        timestamp_str = format_filename_timestamp(start_time)
         filename_id = f"{timestamp_str}_{job_task_id}"
 
         # Calculate duration
@@ -549,8 +599,343 @@ class BookkeepingManager:
         Returns:
             Path to experiment root directory
         """
-        exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root
         return exp_root_path
+
+    def save_job_manifest(
+        self,
+        config: Dict[str, Any],
+        questions: List[Dict[str, Any]],
+        submission_timestamp: datetime,
+        config_snapshot_path: str,
+    ) -> Path:
+        """Save a job manifest recording all planned questions for recovery.
+
+        The manifest uses the same timestamp as the config_snapshot.
+        One manifest per job run (SLURM or local).
+
+        Each question has a status field:
+        - "succeeded": completed successfully
+        - null: not yet succeeded (not started, failed, partial, or interrupted)
+
+        Args:
+            config: Full configuration dictionary
+            questions: List of questions to process (already sliced by range)
+            submission_timestamp: Same timestamp used for config_snapshot
+            config_snapshot_path: Path to the config snapshot (for reference)
+
+        Returns:
+            Absolute path to the saved manifest file
+        """
+        exp_root_path = self.get_experiment_root()
+        exp_meta = config["experiment_metadata"]
+        benchmark = exp_meta["benchmark_subcategory"]
+        experiment = exp_meta["experiment_name"]
+
+        # Use same timestamp format as config_snapshot (millisecond precision)
+        timestamp_str = format_filename_timestamp(submission_timestamp)
+
+        manifest_dir = exp_root_path / benchmark / experiment / "job_manifest"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Same naming format as job_summary: {timestamp}_{job_task_id}.json
+        job_task_id = get_job_task_id()
+        manifest_path = manifest_dir / f"{timestamp_str}_{job_task_id}.json"
+
+        # Build manifest content with per-question status (all start as null)
+        manifest = {
+            "job_task_id": get_job_task_id(),
+            "experiment_name": experiment,
+            "benchmark_subcategory": benchmark,
+            "submission_timestamp": format_timestamp(submission_timestamp),
+            "config_snapshot_path": config_snapshot_path,
+            "num_questions_planned": len(questions),
+            "num_questions_processed": 0,
+            "questions": [
+                {
+                    "index": i,
+                    "question_id": q.get("question_id", f"q_{i}"),
+                    "status": None,  # null = not yet succeeded
+                }
+                for i, q in enumerate(questions)
+            ],
+            "created_at": format_timestamp(datetime.now(timezone.utc)),
+        }
+
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        info_print(
+            f"Job manifest saved: {display_path(manifest_path, self.project_root)}"
+        )
+
+        return manifest_path
+
+    def mark_question_processed(
+        self, manifest_path: Path, question_id: str, succeeded: bool
+    ) -> None:
+        """Mark a question as processed in the manifest.
+
+        Updates the question status and increments num_questions_processed.
+        Called after transcript and bookkeeping are finished for a question.
+
+        Args:
+            manifest_path: Absolute path to the manifest file
+            question_id: The question_id to mark
+            succeeded: True if the question succeeded, False otherwise
+        """
+        if not manifest_path.exists():
+            return
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+
+            # Find and update the question status
+            for q in manifest.get("questions", []):
+                if q.get("question_id") == question_id:
+                    q["status"] = "succeeded" if succeeded else None
+                    break
+
+            # Increment processed count
+            manifest["num_questions_processed"] = (
+                manifest.get("num_questions_processed", 0) + 1
+            )
+
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f, indent=2)
+        except (json.JSONDecodeError, OSError) as e:
+            info_print(f"Warning: Could not update manifest: {e}")
+
+    def check_manifest_complete(self, manifest_path: Path) -> bool:
+        """Check if all questions in manifest are succeeded.
+
+        Args:
+            manifest_path: Absolute path to the manifest file
+
+        Returns:
+            True if all questions have status="succeeded", False otherwise
+        """
+        if not manifest_path.exists():
+            return True  # No manifest = nothing to do
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+
+            questions = manifest.get("questions", [])
+            return all(q.get("status") == "succeeded" for q in questions)
+        except (json.JSONDecodeError, OSError):
+            return False
+
+    def delete_manifest_if_complete(self, manifest_path: Path) -> bool:
+        """Delete manifest if all questions succeeded.
+
+        Args:
+            manifest_path: Absolute path to the manifest file
+
+        Returns:
+            True if manifest was deleted (all complete), False otherwise
+        """
+        if self.check_manifest_complete(manifest_path):
+            try:
+                manifest_path.unlink(missing_ok=True)
+                info_print(
+                    f"Job manifest deleted (all succeeded): {display_path(manifest_path, self.project_root)}"
+                )
+                return True
+            except OSError:
+                pass
+        return False
+
+
+class StreamingJobSummary:
+    """Manages a streaming job summary that updates in real-time.
+
+    Keeps the file handle open for efficient incremental updates.
+    Writes completed transcript stats as they finish, enabling recovery
+    even if the process is killed.
+    """
+
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        questions_total: int,
+        start_time: datetime,
+        config_snapshot_path: str,
+        project_root: Path,
+    ):
+        """Initialize streaming job summary.
+
+        Args:
+            config: Full configuration dictionary
+            questions_total: Total number of questions to process
+            start_time: When the job started
+            config_snapshot_path: Path to config snapshot
+            project_root: Project root directory
+        """
+        self.config = config
+        self.questions_total = questions_total
+        self.start_time = start_time
+        self.config_snapshot_path = config_snapshot_path
+        self.project_root = project_root
+
+        # Counters
+        self.questions_succeeded = 0
+        self.questions_partial = 0
+        self.questions_failed = 0
+        self.per_transcript_stats: List[Dict[str, Any]] = []
+        self.error_summary: List[Dict[str, Any]] = []
+
+        # File handle
+        self._file_handle: Optional[TextIO] = None
+        self._summary_path: Optional[Path] = None
+
+        self._initialize_file()
+
+    def _initialize_file(self) -> None:
+        """Create and initialize the summary file."""
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
+        exp_root_path = Path(exp_root)
+        if not exp_root_path.is_absolute():
+            exp_root_path = self.project_root / exp_root
+
+        exp_meta = self.config["experiment_metadata"]
+        benchmark = exp_meta["benchmark_subcategory"]
+        experiment = exp_meta["experiment_name"]
+
+        timestamp_str = format_filename_timestamp(self.start_time)
+        job_task_id = get_job_task_id()
+        filename_id = f"{timestamp_str}_{job_task_id}"
+
+        self._summary_path = (
+            exp_root_path / benchmark / experiment / "job_summary" / f"{filename_id}.json"
+        )
+        self._summary_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write initial structure
+        self._write_current_state()
+
+        info_print(
+            f"Streaming job summary: {display_path(self._summary_path, self.project_root)}"
+        )
+
+    def _write_current_state(self) -> None:
+        """Write current state to file (atomic write via temp file)."""
+        if self._summary_path is None:
+            return
+
+        job_task_id = get_job_task_id()
+        exp_meta = self.config["experiment_metadata"]
+
+        # Calculate duration so far
+        current_time = datetime.now(timezone.utc)
+        duration_seconds = (current_time - self.start_time).total_seconds()
+
+        summary = {
+            "job_task_id": job_task_id,
+            "experiment_name": exp_meta["experiment_name"],
+            "benchmark_subcategory": exp_meta["benchmark_subcategory"],
+            "start_time": format_timestamp(self.start_time),
+            "last_update": format_timestamp(current_time),
+            "duration_seconds": round(duration_seconds, 3),
+            "config_snapshot_path": self.config_snapshot_path,
+            "status": "in_progress",
+            "processing_statistics": {
+                "questions_total": self.questions_total,
+                "questions_completed": len(self.per_transcript_stats),
+                "questions_succeeded": self.questions_succeeded,
+                "questions_partial": self.questions_partial,
+                "questions_failed": self.questions_failed,
+            },
+            "completed_transcripts": [
+                {
+                    "transcript_id": stat["transcript_id"],
+                    "question_id": stat["question_id"],
+                    "status": stat["status"],
+                }
+                for stat in self.per_transcript_stats
+            ],
+            "errors": self.error_summary,
+        }
+
+        # Atomic write: write to temp file, then rename
+        temp_path = self._summary_path.with_suffix(".json.tmp")
+        with open(temp_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        temp_path.rename(self._summary_path)
+
+    def record_completion(
+        self,
+        transcript_stat: Dict[str, Any],
+        error_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record a completed transcript and update the file.
+
+        Args:
+            transcript_stat: Statistics from the completed transcript
+            error_info: Optional error information for failed/partial
+        """
+        self.per_transcript_stats.append(transcript_stat)
+
+        status = transcript_stat.get("status", "failed")
+        if status == "succeeded":
+            self.questions_succeeded += 1
+        elif status == "partial":
+            self.questions_partial += 1
+            if error_info:
+                self.error_summary.append({
+                    "question_id": transcript_stat.get("question_id"),
+                    "error": error_info,
+                })
+        else:
+            self.questions_failed += 1
+            if error_info:
+                self.error_summary.append({
+                    "question_id": transcript_stat.get("question_id"),
+                    "error": error_info,
+                })
+
+        # Write updated state
+        self._write_current_state()
+
+    def finalize(
+        self,
+        end_time: datetime,
+        effective_backend_config: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> str:
+        """Finalize the job summary with complete statistics.
+
+        Args:
+            end_time: When the job ended
+            effective_backend_config: Optional backend config info
+
+        Returns:
+            Path to the saved summary file
+        """
+        if self._summary_path is None:
+            return ""
+
+        # Use the existing save_job_summary for final comprehensive output
+        manager = BookkeepingManager(self.project_root)
+        return manager.save_job_summary(
+            config=self.config,
+            questions_total=self.questions_total,
+            questions_succeeded=self.questions_succeeded,
+            questions_partial=self.questions_partial,
+            questions_failed=self.questions_failed,
+            start_time=self.start_time,
+            end_time=end_time,
+            question_range=None,  # Already applied
+            error_summary=self.error_summary if self.error_summary else None,
+            per_transcript_stats=self.per_transcript_stats if self.per_transcript_stats else None,
+            config_snapshot_path=self.config_snapshot_path,
+            effective_backend_config=effective_backend_config,
+        )
+
+    def get_path(self) -> Optional[Path]:
+        """Get the path to the summary file."""
+        return self._summary_path

@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional
 
 from src.utils.errors import ProjectRootError
 from src.utils.logging import (
+    EXPERIMENT_ROOT_ENV,
     aggregate_validation_errors,
     display_path,
     format_timestamp,
@@ -231,7 +232,7 @@ class TranscriptManager:
         Returns:
             Path to the saved transcript file
         """
-        exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root
@@ -297,8 +298,8 @@ class TranscriptManager:
         summary = transcript["conversation_summary"]
 
         # Build transcript_path using display_path format
-        # This handles MAC_FAIRNESS_EXPERIMENT_ROOT if set
-        exp_root = os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", "experiment")
+        # This handles EXPERIMENT_ROOT_ENV if set
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root

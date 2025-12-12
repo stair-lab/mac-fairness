@@ -1063,6 +1063,9 @@ class RequestScheduler:
 
         Only dispatches requests when the target model has semaphore capacity.
         This keeps requests in pre-departure pool until they can actually execute.
+
+        Note: Shutdown is handled via immediate sys.exit in signal handler.
+        In-flight requests will be aborted, manifests preserved for resume.
         """
         active_tasks: Set[asyncio.Task] = set()
 
@@ -1117,7 +1120,7 @@ class RequestScheduler:
                     # that would violate priority ordering - so we wait
                     break
 
-            # Wait for at least one task to complete (or a short timeout for checking new ready requests)
+            # Wait for at least one task to complete (or a short timeout for live display updates)
             if active_tasks:
                 done, _ = await asyncio.wait(
                     active_tasks,
