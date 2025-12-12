@@ -70,19 +70,30 @@ Output ONLY the JSON object, no other text or markdown formatting.
 ### Discussion Format
 
 - Natural language: `spkr_001 (a white economist)'s answer to the question is "Not answerable" and the reason is that: Without additional context...`
-- No artificial prefixes like "B ..."
-- Shows actual answer text (after flexible answer matching) instead of letter codes
+- No artificial prefixes like `spkr_001: B. ...`
+- Shows actual answer text (after flexible answer matching) instead of letter codes (internal recording only)
 - Identity display follows configuration settings
-- When `reveal_presence_mode: false`, format becomes `spkr_001's answer to the question is "Not answerable" and the reason is that: Without additional context...`
+- When `reveal_presence_mode: false` (fully anonymous), format becomes `spkr_001's answer to the question is "Not answerable" and the reason is that: Without additional context...`
 
 ### Round Ordering
 
-- **Round 0**: System → Context → Question/Choices → Format
-- **Round 1+**: System → Context → Question/Choices → Discussion → Format
-- Question appears before discussion to establish context
+- **Round 0**: System → Context of question (if any) → Question → Choices → Response format requirement
+- **Round 1+**: System → Context of question (if any) → Question → Choices → Previous discussion → Response format requirement
+- Question appears before discussion to establish natural conversation flow
 - Re-asking uses "When answering the question..." without repeating question text
 
 ## Response Processing
+
+### JSON Parsing and Repair
+
+Before answer matching, the framework parses model responses with multiple fallback strategies:
+
+1. **Direct parsing**: Standard JSON parsing
+1. **Code block extraction**: Extract from ` ```json ... ``` ` markdown blocks
+1. **Object detection**: Find any `{...}` JSON object in text
+1. **Repair**: Use `json-repair` library to fix malformed JSON (e.g., trailing commas, unquoted keys)
+
+If repair is needed, a `JSONParseError` with `error_code: "JSON_PARSE_REPAIRED"` is recorded in the message metadata. If parsing fails entirely, `error_code: "JSON_PARSE_FAILED"` is recorded and the message triggers a retry.
 
 ### Answer Matching Before Mapping to Choice IDs
 
@@ -90,8 +101,8 @@ The system includes flexible answer matching to handle common text variations wi
 
 Answer matching is explicitly limited to:
 
-- Role: Only `participant` role (the support for `judge`, `moderator`, or `devils_advocate` is left as TODO)
-- Question types: Only `binary` and `multiple_choice` questions (not open-ended or other types)
+- Role: Only `participant` role (TODO: support for other roles like `judge`, `moderator`, `devils_advocate`, etc.)
+- Question types: Only `binary` and `multiple_choice` questions (TODO: open-ended or other types)
 
 Match types include:
 
@@ -114,9 +125,9 @@ Match types include:
 The framework automatically:
 
 1. Match flexibly `"answer"` to `"text"` from `"choices"` (for QAs)
-2. Maps matched `"answer"` field to `"opinion"` field for `"participant"`
-3. Converts full text to letter code: `"Not answerable"` -> `"B"`
-4. Adds `"response_type"` for routing
+1. Maps matched `"answer"` field to `"opinion"` field for `"participant"`
+1. Converts full text to letter code: `"Not answerable"` -> `"B"`
+1. Adds `"response_type"` for routing
 
 ## Extending to Other Roles
 
@@ -132,15 +143,15 @@ Each role would have its own prompt template and response schema while sharing t
 
 Based on the reveal settings AND what attributes are actually specified (non-null), each message's `agent_identity_display` field is automatically generated:
 
-| Agent Config                           | Display Settings           | Human Agent Display   | AI Agent Display                         |
-| -------------------------------------- | -------------------------- | --------------------- | ---------------------------------------- |
-| persona="doctor", demographics="black" | All revealed               | `"a black doctor"`    | `"an AI agent assisting a black doctor"` |
-| persona="doctor", demographics="black" | Demographics hidden        | `"a doctor"`          | `"an AI agent assisting a doctor"`       |
-| persona="doctor", demographics="black" | Persona hidden             | `"a black person"`    | `"an AI agent assisting a black person"` |
-| persona=null, demographics="black"     | All revealed               | `"a black person"`    | `"an AI agent assisting a black person"` |
-| persona="doctor", demographics=null    | All revealed               | `"a doctor"`          | `"an AI agent assisting a doctor"`       |
-| persona=null, demographics=null        | All revealed               | `"a person"`          | `"an AI agent assisting a person"`       |
-| Any config                             | reveal_presence_mode=false | None (no parentheses) | None (no parentheses)                    |
+| Agent Config                           | Display Settings           | Human Agent Display | AI Agent Display                         |
+| -------------------------------------- | -------------------------- | ------------------- | ---------------------------------------- |
+| persona="doctor", demographics="black" | All revealed               | `"a black doctor"`  | `"an AI agent assisting a black doctor"` |
+| persona="doctor", demographics="black" | Demographics hidden        | `"a doctor"`        | `"an AI agent assisting a doctor"`       |
+| persona="doctor", demographics="black" | Persona hidden             | `"a black person"`  | `"an AI agent assisting a black person"` |
+| persona=null, demographics="black"     | All revealed               | `"a black person"`  | `"an AI agent assisting a black person"` |
+| persona="doctor", demographics=null    | All revealed               | `"a doctor"`        | `"an AI agent assisting a doctor"`       |
+| persona=null, demographics=null        | All revealed               | `"a person"`        | `"an AI agent assisting a person"`       |
+| Any config                             | reveal_presence_mode=false | None                | None                                     |
 
 > **Note**: The reveal settings control what to show if it exists. Null values are handled gracefully by showing only what's available.
 

@@ -26,7 +26,7 @@ identity_reveal_config:
   reveal_demographics: true
   reveal_presence_mode: true
 
-# Prompt template configuration (optional - defaults shown)
+# Prompt template configuration
 prompt_template_config:
   for_participant:
     # How to display choices: bullet, letter/arabic/roman + _ + colon/dot/paren, none
@@ -39,6 +39,7 @@ model_definitions:
   llama32_1b:
     backend: ollama
     model_name: llama3.2:1b-instruct-q4_K_M
+
     ollama_config:
       num_ctx: 2048
 

@@ -7,14 +7,15 @@ This document explains the async scheduling architecture that enables efficient 
 Running multi-agent conversations naively would result in poor GPU utilization:
 
 1. **Sequential within conversation**: If agents respond one after another within a conversation, the GPU sits idle between requests
-2. **Sequential across conversations**: If we process one conversation at a time, we lose massive parallelism opportunities
-3. **Dependency constraints**: Some roles (e.g., moderator) naturally need to wait for other agents before responding
+1. **Sequential across conversations**: If we process one conversation at a time, we lose massive parallelism opportunities
+1. **Dependency constraints**: Some roles (e.g., moderator) naturally need to wait for other agents before responding
+1. **Different number of retries**: A message may need several retries (especially for smaller models), while processed requests need to wait under static batching
 
 The async framework solves these problems by:
 
 - **Parallelizing across conversations**: Different conversations have no cross-visibility and can run fully in parallel
 - **Parallelizing within rounds**: Within a single round, agents without dependencies can generate responses concurrently
-- **Maximizing GPU batch utilization**: vLLM's continuous batching is most efficient when many requests are in-flight simultaneously
+- **Maximizing GPU batch utilization**: vLLM's continuous batching is most efficient when many requests are in-flight simultaneously, if requests across conversations are orchestrated properly
 
 ## Backend Support
 
@@ -32,8 +33,8 @@ The `RequestScheduler` maintains three conceptual pools that control request flo
 ├──────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │   ┌──────────────────┐     ┌──────────────────┐     ┌────────────────┐   │
-│   │   PENDING POOL   │────▶│ PRE-DEPARTURE    │────▶│   IN-FLIGHT    │   │
-│   │                  │     │     POOL         │     │                │   │
+│   │   PENDING POOL   │────▶│  PRE-DEPARTURE   │────▶│   IN-FLIGHT    │   │
+│   │                  │     │      POOL        │     │                │   │
 │   │  Blocked on      │     │  Ready, waiting  │     │  Executing on  │   │
 │   │  dependencies    │     │  for GPU slot    │     │  GPU           │   │
 │   └──────────────────┘     └──────────────────┘     └────────────────┘   │
@@ -70,7 +71,7 @@ agent_definitions:
   - agent_id: mod_001
     role: moderator
     role_specific_config:
-      speak_after_within_round: [spkr_000, spkr_001] # Must wait for both participants
+      speak_after_within_round: [spkr_000, spkr_001] # must wait for both participants
 ```
 
 In round 0:
@@ -85,7 +86,7 @@ In round 0:
 
 **Who controls it**: The `RequestScheduler` manages this pool. The `_scheduler_loop()` pops requests when their model's semaphore has capacity.
 
-**Contents**: Requests with all dependencies satisfied, ordered by priority. A request stays here until its target model has a free slot.
+**Contents**: Requests with all dependencies satisfied, ordered by priority. A request stays here until its target model has a free slot on GPU.
 
 **Data structure**: Min-heap (`heapq`) of `PrioritizedRequest` objects for O(log n) insertion and O(1) peek at highest priority.
 
@@ -118,11 +119,11 @@ priority = (
 
 1. **Re-prompts first** (`is_reprompt`): When an agent's response fails validation (e.g., answer doesn't match choices), the retry should happen immediately to avoid blocking downstream dependencies.
 
-2. **More progress first** (`-rounds_completed`): Conversations that have completed more rounds are closer to finishing. Prioritizing them reduces overall latency by completing conversations sooner, freeing their state memory.
+1. **More progress first** (`-rounds_completed`): Conversations that have completed more rounds are closer to finishing. Prioritizing them reduces overall latency by completing conversations sooner, freeing their state memory.
 
-3. **Earlier conversations** (`conversation_id`): FIFO ordering as a tiebreaker ensures fair scheduling and predictable behavior.
+1. **Earlier conversations** (`conversation_id`): FIFO ordering as a tiebreaker ensures fair scheduling and predictable behavior.
 
-4. **Lower round first** (`round_id`): Within the same conversation, earlier rounds should complete before later rounds (though this is mostly handled by dependencies).
+1. **Lower round first** (`round_id`): Within the same conversation, earlier rounds should complete before later rounds (though this is mostly handled by dependencies).
 
 ### Why Priority Ordering Doesn't Cause Racing
 
@@ -132,9 +133,9 @@ A key concern: when a GPU finishes processing a request, could reordering the qu
 
 1. **Atomic state updates**: When a request completes, `_on_request_complete()` updates conversation state synchronously before `_check_pending_for_readiness()` moves new requests to pre-departure. The scheduler loop only sees consistent state.
 
-2. **Semaphore-based dispatch**: Requests are only dispatched when the model has capacity. Even if priorities change, the highest-priority request with available capacity is always chosen.
+1. **Semaphore-based dispatch**: Requests are only dispatched when the model has capacity. Even if priorities change, the highest-priority request with available capacity is always chosen.
 
-3. **Per-conversation isolation**: A failed conversation only affects its own requests:
+1. **Per-conversation isolation**: A failed conversation only affects its own requests:
 
    ```python
    def _remove_conversation_requests(self, conversation_id: int) -> None:
@@ -143,7 +144,7 @@ A key concern: when a GPU finishes processing a request, could reordering the qu
        # Other conversations are unaffected
    ```
 
-4. **No cross-conversation dependencies**: Conversations are fully independent. Request completion in conversation A never blocks or unblocks requests in conversation B.
+1. **No cross-conversation dependencies**: Conversations are fully independent. Request completion in conversation X never blocks or unblocks requests in conversation Y.
 
 ## Parallelism Model
 
@@ -185,6 +186,13 @@ agent_definitions:
       speak_after_within_round: [spkr_000, spkr_001, spkr_002]
 ```
 
+> **Note**: `speak_after_within_round` serves dual purposes:
+>
+> 1. **Dependency specification** (scheduler): Determines when the agent can start generating (must wait for listed agents to complete in current round)
+> 1. **Visibility specification** (prompt builder): The agent's prompt includes responses from the listed agents in the current round (in addition to the standard previous-round discussion visible to all participants)
+>
+> This is distinct from `visible_to` (handled by the router), which controls who can read the agent's response in subsequent rounds.
+
 ### Across Rounds
 
 **Sequential by necessity**: Round N+1 cannot start until round N completes (agents need to see previous round's messages). However:
@@ -199,9 +207,9 @@ agent_definitions:
 
 1. **Continuous batching utilization**: By keeping many requests in-flight, vLLM can batch them efficiently on GPU. A single model serving 3 agents across 100 conversations can have up to 300 concurrent requests (limited by effective `max_num_seqs`).
 
-2. **Hiding latency**: While GPU generates response for conversation A, prompts for conversations B, C, D are being prepared. This overlaps CPU work with GPU work.
+1. **Hiding latency**: While GPU generates response for conversation A, prompts for conversations B, C, D are being prepared. This overlaps CPU work with GPU work.
 
-3. **Optimal dispatch**: Priority ordering ensures high-value requests (re-prompts, nearly-complete conversations) get GPU time first.
+1. **Optimal dispatch**: Priority ordering ensures high-value requests (re-prompts, nearly-complete conversations) get GPU time first.
 
 ### Key Configuration: `max_num_seqs_upper_bound`
 
@@ -244,13 +252,13 @@ model_definitions:
   gemma2_27b:
     backend: vllm
     vllm_config:
-      attention_backend: "FLASHINFER"  # Required for Gemma 2
+      attention_backend: "FLASHINFER" # Required for Gemma 2
 ```
 
 **Available backends** (depends on vLLM build):
 
 - `FLASH_ATTN` - Default Flash Attention (FA2/FA3)
-- `FLASHINFER` - FlashInfer backend (supports softcapping, recommended for Gemma 2)
+- `FLASHINFER` - FlashInfer backend
 - `XFORMERS` - xFormers backend
 - `TRITON_ATTN` - Triton-based attention
 - `FLEX_ATTENTION` - Flex Attention

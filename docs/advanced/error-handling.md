@@ -13,11 +13,12 @@ MacFairnessError (base exception class)
 │   └── InvalidConfigFieldError      # Invalid field types or values
 ├── ValidationError
 │   ├── MissingStructuredOutputError # Agent response lacks structured output
+│   ├── JSONParseError               # JSON parsing failed or required repair
 │   ├── MaxLengthExceededError       # Response exceeds maximum token limit
 │   └── AnswerMatchError
 │       └── InvalidAnswerError       # Answer doesn't match valid choices
 ├── AgentError
-│   └── MaxRetriesExceededError      # Exhausted retry attempts
+│   └── MaxRetriesExceededError      # Exhausted retry attempts (e.g., after a certain number of ValidationError's)
 ├── FileOperationError
 │   └── FileNotFoundError_           # Required file not found (trailing underscore avoids shadowing builtin)
 ├── VLLMEngineError                  # Base class for vLLM backend errors

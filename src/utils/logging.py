@@ -474,12 +474,12 @@ class MetricsCollector:
             "total_conversations": total_conversations,
             "successful_conversations": successful_conversations,
             "failed_conversations": failed_conversations,
-            "success_rate": successful_conversations / total_conversations
+            "success_rate": float(f"{successful_conversations / total_conversations:.5f}")
             if total_conversations > 0
-            else 0,
-            "consensus_rate": consensus_count / successful_conversations
+            else 0.0,
+            "consensus_rate": float(f"{consensus_count / successful_conversations:.5f}")
             if successful_conversations > 0
-            else 0,
+            else 0.0,
             "total_tokens_used": total_tokens_all,
             "average_tokens_per_conversation": total_tokens_all / total_conversations
             if total_conversations > 0

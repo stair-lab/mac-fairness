@@ -178,9 +178,9 @@ class BookkeepingManager:
                 "questions_succeeded": questions_succeeded,
                 "questions_partial": questions_partial,
                 "questions_failed": questions_failed,
-                "success_rate": questions_succeeded / questions_total
+                "success_rate": float(f"{questions_succeeded / questions_total:.5f}")
                 if questions_total > 0
-                else 0,
+                else 0.0,
                 "error_summary": error_summary_structured,
             },
             # Retry statistics

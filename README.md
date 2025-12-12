@@ -66,6 +66,19 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install -e .
 ```
 
+### Environment Variables
+
+| Variable                       | Required | Description                                                                                        |
+| ------------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
+| `MAC_FAIRNESS_WORKSPACE`       | Yes      | Project root directory                                                                             |
+| `MAC_FAIRNESS_EXPERIMENT_ROOT` | No       | Override experiment output directory (defaults to `$MAC_FAIRNESS_WORKSPACE/experiment`)            |
+| `MAC_FAIRNESS_DEBUG_FLAG`      | No       | Set to `1` to enable debug output AND more verbose transcript recording in which prompts are saved |
+| `MAC_FAIRNESS_LIVE_STATUS`     | No       | Set to `1` to enable live status display                                                           |
+| `CUDA_VISIBLE_DEVICES`         | No       | Specify which GPUs to use (e.g., `0`, `1` or `2,5`)                                                |
+| `OMP_NUM_THREADS`              | No       | Set OpenMP thread count to avoid CPU oversubscription (e.g., `8`)                                  |
+
+> **Note** when enabling live status display `MAC_FAIRNESS_LIVE_STATUS=1`, disable the debug flag `MAC_FAIRNESS_DEBUG_FLAG=0`
+
 ---
 
 ## 3. Repository Structure
@@ -87,7 +100,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │
 ├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
 │   ├── index.jsonl                         # Append-only index for production experiments
-│   ├── dev_ollama_index.jsonl              # Separate index for dev_ollama experiments
+│   ├── dev_{backend}_index.jsonl           # Separate index for dev_{backend} pilot experiments, e.g., dev_vllm
 │   └── config_snapshot/                    # Immutable config snapshots from submitted jobs
 │       └── {benchmark_subcategory}/        # Organized by benchmark subcategory
 │
@@ -102,18 +115,18 @@ $MAC_FAIRNESS_WORKSPACE/
 ├── config/                                 # Working configuration files (edit here)
 │   ├── {benchmark_subcategory}/            # Organized by benchmark subcategory
 │   │   └── {experiment_name}_scratch.yaml  # Editable config files
-│   └── dev_ollama/                         # Dev configurations (Ollama, no GPU required)
+│   ├── dev_ollama/                         # Dev configurations (Ollama, no GPU required)
+│   └── dev_vllm/                           # Dev configurations (vLLM, GPU required)
 │
 ├── data/                                   # Benchmark questions in unified format
 │   ├── BBQ/                                # BBQ benchmark family
 │   ├── DifferenceAwareness/                # DifferenceAwareness benchmark suite
-│   ├── DiscrimEval/                        # DiscrimEval benchmark family
-│   └── dev_ollama/                         # Dev testing data (no GPU required)
+│   └── DiscrimEval/                        # DiscrimEval benchmark family
 │
 ├── src/                                    # Source code
 │   ├── agent/                              # Agent implementations
 │   │   ├── base_agent.py                   # Abstract base class with shared functionality
-│   │   ├── async_ollama_agent.py           # Async Ollama agent for local dev (no GPU)
+│   │   ├── async_ollama_agent.py           # Async Ollama agent for local dev (no GPU required)
 │   │   ├── async_vllm_agent.py             # Async vLLM agent for production (GPU required)
 │   │   └── model_factory.py                # Smart backend detection and agent creation
 │   │
@@ -146,6 +159,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │
 └── docs/                                   # Documentation
     ├── advanced/                           # Advanced topics (detailed guides)
+    │   ├── async-framework.md              # Async scheduling and GPU utilization
     │   ├── error-handling.md               # Error handling and recovery mechanisms
     │   └── prompt-templates.md             # Prompt engineering and template design
     └── guide/
@@ -169,8 +183,7 @@ $MAC_FAIRNESS_WORKSPACE/
 
 - Organized by benchmark subcategory for better scalability
 - Files named `*_scratch.yaml` to indicate they're editable working copies
-- Version-controlled but expected to change between jobs
-- Edit these freely after jobs are submitted
+- Expected to change between jobs (as a scratch pad), edit these freely after jobs are submitted and no need to wait for the job to actually get run
 
 **`bookkeeping/`**: Runtime metadata and config snapshots (what has been submitted/run)
 
@@ -194,12 +207,12 @@ $MAC_FAIRNESS_WORKSPACE/
 Each experiment configuration defines the agent setup and routing strategy applied to ALL questions in a benchmark run.
 
 ```yaml
-# config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+# Dev vLLM configuration for meta-llama/Llama-3.3-70B-Instruct
 
-# Experiment identification and data source
+# Experiment identification
 experiment_metadata:
-  experiment_name: llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10
-  benchmark_subcategory: bbq_race
+  experiment_name: llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10
+  benchmark_subcategory: dev_vllm
   schema_version: "2025-12-10"
   questions_file: data/BBQ/bbq_race.jsonl
 
@@ -215,25 +228,34 @@ retry_config:
   retry_on_validation_error: true
   retry_on_generation_error: true
 
-# Identity revealing settings
+# Identity reveal configuration - controls how agents perceive each other
 identity_reveal_config:
   reveal_persona: true
   reveal_demographics: true
   reveal_presence_mode: true
 
+# Prompt template configuration
+prompt_template_config:
+  for_participant:
+    # How to display choices: bullet, letter/arabic/roman + _ + colon/dot/paren, none
+    choice_display_format: letter_dot
+    # Order of fields in JSON output: answer_first, rationale_first
+    json_field_order: answer_first
+
 # Model definitions
 model_definitions:
-  llama31_8b:
+  llama33_70b:
     backend: vllm
-    model_path: meta-llama/Llama-3.1-8B-Instruct
+    model_path: meta-llama/Llama-3.3-70B-Instruct
 
     vllm_config:
-      tensor_parallel_size: 1
-      gpu_memory_utilization: 0.9
-      max_model_len: 4096
-      dtype: auto
-      max_num_seqs_upper_bound: 256  # actual value limited by KV cache
+      tensor_parallel_size: 2
+      gpu_memory_utilization: 0.95
+      max_model_len: 2048
+      dtype: auto # let vLLM auto-detect optimal dtype
+      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
+      attention_backend: "FLASHINFER" # optional
 
 # Agent definitions
 agent_definitions:
@@ -242,27 +264,61 @@ agent_definitions:
     persona: doctor
     demographics: black
     if_as_human: true
-    model: llama31_8b
+    model: llama33_70b
     temperature: 0.7
     max_tokens: 512
 
   - agent_id: spkr_001
     role: participant
-    persona: doctor
+    persona: economist
     demographics: white
     if_as_human: true
-    model: llama31_8b
+    model: llama33_70b
     temperature: 0.7
     max_tokens: 512
 
   - agent_id: spkr_002
     role: participant
-    persona: policy_expert
+    persona: policy expert
     demographics: null
-    if_as_human: true
-    model: llama31_8b
+    if_as_human: false
+    model: llama33_70b
     temperature: 0.7
     max_tokens: 512
+```
+
+### Model Definitions
+
+Models are defined in `model_definitions` with backend-specific configurations:
+
+**vLLM Backend** (production, GPU required):
+
+```yaml
+model_definitions:
+  llama33_70b:
+    backend: vllm
+    model_path: meta-llama/Llama-3.3-70B-Instruct
+
+    vllm_config:
+      tensor_parallel_size: 2
+      gpu_memory_utilization: 0.95
+      max_model_len: 2048 # context window size
+      dtype: auto # let vLLM auto-detect optimal dtype
+      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
+      enable_prefix_caching: true
+      attention_backend: "FLASHINFER" # optional
+```
+
+**Ollama Backend** (development, no GPU required):
+
+```yaml
+model_definitions:
+  llama32_1b:
+    backend: ollama
+    model_name: llama3.2:1b-instruct-q4_K_M
+
+    ollama_config:
+      num_ctx: 2048 # context window size
 ```
 
 ### Agent Configuration
@@ -297,7 +353,7 @@ The `prompt_template_config` controls how prompts are formatted for agents. This
 
 ```yaml
 prompt_template_config:
-  for_participant:
+  for_participant: # role specific
     # How to display answer choices in the prompt
     choice_display_format: bullet # default
     # Order of fields in the JSON output instructions
@@ -318,11 +374,11 @@ prompt_template_config:
 | `roman_colon`  | `I: Option text`  |
 | `roman_dot`    | `I. Option text`  |
 | `roman_paren`  | `(I) Option text` |
-| `none`         | `Option text`     |
+| `none`         | null              |
 
 **`json_field_order`** options:
 
-- `answer_first`: `{"answer": "A", "rationale": "..."}` (recommended for shorter models)
+- `answer_first`: `{"answer": "A", "rationale": "..."}`
 - `rationale_first`: `{"rationale": "...", "answer": "A"}`
 
 Placing `answer` first ensures the answer is captured even if the response is truncated.
@@ -392,8 +448,8 @@ python script/formatter/discrim_eval_formatter.py \
 # Run locally (snapshot saved at start, then executed immediately)
 python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
-# Process specific question range (useful for testing)
-python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml --range 0-10
+# Process specific question range (useful for dev_ testing)
+python script/run_experiment.py config/dev_vllm/llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10_scratch.yaml --range 0-10
 ```
 
 ### Slurm Submission
@@ -403,22 +459,19 @@ python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demog
 ./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
 # Submit array job (divides questions evenly among tasks)
-./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml --array-tasks 20
-
-# Array job with manual question count
-./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml --array-tasks 20 --total-questions 6879
+./script/cluster/submit_slurm.sh config/bbq_race/llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10_scratch.yaml --array-tasks 5
 ```
 
 **Execution workflow:**
 
 1. Load and save config snapshot to `bookkeeping/config_snapshot/{benchmark_subcategory}/{experiment_name}_{TIMESTAMP}.yaml`
-2. Load the snapshot (not scratch file) for execution
-3. Read questions from the specified JSONL file
-4. Initialize models using vLLM async engines
-5. Run each question with the experiment-level agent configurations
-6. Save transcripts to `{MAC_FAIRNESS_EXPERIMENT_ROOT}/{benchmark_subcategory}/{experiment_name}/transcript/{uuid}.json`
-7. Append to `bookkeeping/index.jsonl` with metadata for each transcript
-8. Generate job summary with execution statistics, metrics, and error aggregation
+1. Load the snapshot (not scratch file) for execution
+1. Read questions from the specified JSONL file
+1. Initialize models using vLLM async engines
+1. Run each question with the experiment-level agent configurations
+1. Save transcripts to `{MAC_FAIRNESS_EXPERIMENT_ROOT}/{benchmark_subcategory}/{experiment_name}/transcript/{uuid}.json`
+1. Append to `bookkeeping/index.jsonl` with metadata for each transcript
+1. Generate job summary with execution statistics, metrics, and error aggregation
 
 **Config snapshot behavior:**
 
@@ -469,7 +522,7 @@ The index system uses JSONL for concurrent-safe appends:
 
 - `index.jsonl`: Append-only database (one record per transcript)
 - File locking ensures multiple concurrent jobs can safely append
-- Special case: Dev experiments use separate index, e.g., `dev_ollama_index.jsonl`
+- Dev experiments use separate indices (e.g., `dev_ollama_index.jsonl`, `dev_vllm_index.jsonl`)
 
 Each index record contains:
 
