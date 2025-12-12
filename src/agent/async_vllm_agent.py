@@ -6,6 +6,10 @@ vLLM handles continuous batching internally.
 
 import gc
 import os
+import re
+import select
+import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional
@@ -32,6 +36,126 @@ class VLLMConfigError(ValueError):
     """Raised when vLLM configuration is invalid."""
 
     pass
+
+
+class VLLMOutputCapture:
+    """Capture vLLM's Maximum concurrency from stdout/stderr during engine initialization.
+
+    vLLM v1 runs EngineCore in a subprocess which writes directly to file descriptors,
+    bypassing Python's sys.stdout/sys.stderr. We use os.dup2() to redirect at the
+    file descriptor level, with a pipe to capture while still forwarding output.
+    """
+
+    # Pattern matches: "Maximum concurrency for 2,048 tokens per request: 110.31x"
+    _pattern = re.compile(
+        r"Maximum concurrency for [\d,]+ tokens per request: ([\d.]+)x"
+    )
+
+    def __init__(self) -> None:
+        self.max_concurrency: Optional[float] = None
+        self._captured_output: str = ""
+        self._original_stdout_fd: Optional[int] = None
+        self._original_stderr_fd: Optional[int] = None
+        self._saved_stdout_fd: Optional[int] = None
+        self._saved_stderr_fd: Optional[int] = None
+        self._pipe_read_fd: Optional[int] = None
+        self._pipe_write_fd: Optional[int] = None
+        self._reader_thread: Optional[threading.Thread] = None
+        self._stop_event: Optional[threading.Event] = None
+
+    def __enter__(self) -> "VLLMOutputCapture":
+        """Start capturing stdout/stderr at the file descriptor level."""
+        # Create a pipe for capturing output
+        self._pipe_read_fd, self._pipe_write_fd = os.pipe()
+
+        # Save original file descriptors
+        self._original_stdout_fd = sys.stdout.fileno()
+        self._original_stderr_fd = sys.stderr.fileno()
+        self._saved_stdout_fd = os.dup(self._original_stdout_fd)
+        self._saved_stderr_fd = os.dup(self._original_stderr_fd)
+
+        # Redirect stdout and stderr to the pipe
+        os.dup2(self._pipe_write_fd, self._original_stdout_fd)
+        os.dup2(self._pipe_write_fd, self._original_stderr_fd)
+
+        # Start a thread to read from the pipe and forward to original stdout
+        self._stop_event = threading.Event()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True
+        )
+        self._reader_thread.start()
+
+        return self
+
+    def _reader_loop(self) -> None:
+        """Read from pipe, capture, and forward to original stdout."""
+        buffer = []
+        while not self._stop_event.is_set():
+            try:
+                # Non-blocking read with small timeout
+                readable, _, _ = select.select([self._pipe_read_fd], [], [], 0.1)
+                if readable:
+                    data = os.read(self._pipe_read_fd, 4096)
+                    if data:
+                        # Forward to original stdout
+                        os.write(self._saved_stdout_fd, data)
+                        # Capture for parsing
+                        buffer.append(data.decode("utf-8", errors="replace"))
+            except Exception:
+                break
+
+        # Read any remaining data
+        try:
+            while True:
+                readable, _, _ = select.select([self._pipe_read_fd], [], [], 0)
+                if not readable:
+                    break
+                data = os.read(self._pipe_read_fd, 4096)
+                if not data:
+                    break
+                os.write(self._saved_stdout_fd, data)
+                buffer.append(data.decode("utf-8", errors="replace"))
+        except Exception:
+            pass
+
+        self._captured_output = "".join(buffer)
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Stop capturing and parse the output."""
+        # Signal reader thread to stop
+        if self._stop_event:
+            self._stop_event.set()
+
+        # Restore original file descriptors
+        if self._saved_stdout_fd is not None and self._original_stdout_fd is not None:
+            os.dup2(self._saved_stdout_fd, self._original_stdout_fd)
+        if self._saved_stderr_fd is not None and self._original_stderr_fd is not None:
+            os.dup2(self._saved_stderr_fd, self._original_stderr_fd)
+
+        # Close pipe write end to signal EOF to reader
+        if self._pipe_write_fd is not None:
+            os.close(self._pipe_write_fd)
+
+        # Wait for reader thread to finish
+        if self._reader_thread:
+            self._reader_thread.join(timeout=2.0)
+
+        # Close remaining file descriptors
+        if self._pipe_read_fd is not None:
+            os.close(self._pipe_read_fd)
+        if self._saved_stdout_fd is not None:
+            os.close(self._saved_stdout_fd)
+        if self._saved_stderr_fd is not None:
+            os.close(self._saved_stderr_fd)
+
+        # Parse captured output for max concurrency
+        self._parse_output(self._captured_output)
+
+    def _parse_output(self, text: str) -> None:
+        """Extract max concurrency from captured text."""
+        match = self._pattern.search(text)
+        if match:
+            self.max_concurrency = float(match.group(1))
 
 
 @dataclass
@@ -190,6 +314,9 @@ class AsyncVLLMAgent(BaseAgent):
     _total_requests: ClassVar[Dict[str, int]] = {}
     _metrics_collector: ClassVar[RequestMetricsCollector] = RequestMetricsCollector()
 
+    # Captured max concurrency from vLLM logs (handles hybrid attention models correctly)
+    _max_concurrency_from_log: ClassVar[Dict[str, Optional[float]]] = {}
+
     # Supported vLLM config parameters
     VLLM_CONFIG_PARAMS = {
         "tensor_parallel_size": int,
@@ -276,21 +403,30 @@ class AsyncVLLMAgent(BaseAgent):
         engine_args = self._build_engine_args()
         debug_print(f"AsyncEngineArgs: {engine_args}")
 
-        try:
-            async_engine = AsyncLLMEngine.from_engine_args(engine_args)
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "out of memory" in error_msg or "oom" in error_msg:
-                raise VLLMConfigError(
-                    f"GPU out of memory loading {self.model_path}. "
-                    f"Try reducing gpu_memory_utilization or max_num_seqs"
-                ) from e
-            elif "not found" in error_msg or "does not exist" in error_msg:
-                raise VLLMConfigError(
-                    f"Model {self.model_path} not found. "
-                    f"Ensure it's downloaded: huggingface-cli download {self.model_path}"
-                ) from e
-            raise VLLMConfigError(f"Failed to initialize AsyncLLMEngine: {e}") from e
+        # Capture vLLM's "Maximum concurrency" from stdout/stderr during initialization
+        # vLLM v1 runs EngineCore in a subprocess, so logs go to stdout/stderr
+        # This value correctly handles hybrid attention models (Gemma2, Ministral, etc.)
+        output_capture = VLLMOutputCapture()
+
+        with output_capture:
+            try:
+                async_engine = AsyncLLMEngine.from_engine_args(engine_args)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "out of memory" in error_msg or "oom" in error_msg:
+                    raise VLLMConfigError(
+                        f"GPU out of memory loading {self.model_path}. "
+                        f"Try reducing gpu_memory_utilization or max_num_seqs"
+                    ) from e
+                elif "not found" in error_msg or "does not exist" in error_msg:
+                    raise VLLMConfigError(
+                        f"Model {self.model_path} not found. "
+                        f"Ensure it's downloaded: huggingface-cli download {self.model_path}"
+                    ) from e
+                raise VLLMConfigError(f"Failed to initialize AsyncLLMEngine: {e}") from e
+
+        # Store captured max concurrency for later use
+        self._max_concurrency_from_log[self.model_path] = output_capture.max_concurrency
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_path)
         self._tokenizers[self.model_path] = tokenizer
@@ -300,7 +436,9 @@ class AsyncVLLMAgent(BaseAgent):
         self._total_requests[self.model_path] = 0
 
         # Extract effective max_num_seqs from vLLM (may be lower than config due to KV cache)
-        effective_max_num_seqs = self._get_effective_max_num_seqs(async_engine)
+        effective_max_num_seqs = self._get_effective_max_num_seqs(
+            async_engine, output_capture.max_concurrency
+        )
         config_max_num_seqs = self.vllm_config.get("max_num_seqs_upper_bound")
         if effective_max_num_seqs and config_max_num_seqs:
             if effective_max_num_seqs < config_max_num_seqs:
@@ -312,19 +450,26 @@ class AsyncVLLMAgent(BaseAgent):
         info_print("AsyncLLMEngine initialized successfully")
 
     @staticmethod
-    def _get_effective_max_num_seqs(engine: Any) -> Optional[int]:
+    def _get_effective_max_num_seqs(
+        engine: Any, max_concurrency_from_log: Optional[float] = None
+    ) -> Optional[int]:
         """Extract effective max_num_seqs from vLLM engine.
 
-        Calculates the actual maximum concurrency based on KV cache availability.
-        This matches vLLM's "Maximum concurrency for X tokens per request: Y.YYx" log.
+        Uses vLLM's logged "Maximum concurrency" value when available, which correctly
+        handles hybrid attention models (Gemma2, Ministral, etc.) that have different
+        KV cache requirements per layer.
 
-        Note on tensor parallelism:
-        - cache_config.num_gpu_blocks is already the min across all TP workers
-        - vLLM synchronizes this during KV cache initialization (kv_cache_utils.py)
-        - So this calculation is correct for any tensor_parallel_size
+        Falls back to manual calculation if log capture failed.
+
+        Note: vLLM v1 runs EngineCore in a subprocess, so log capture may not work.
+        The fallback calculation may overestimate capacity for hybrid attention models.
+        Check vLLM's "Maximum concurrency" log output for the accurate value.
 
         Args:
             engine: AsyncLLMEngine instance
+            max_concurrency_from_log: Value captured from vLLM's log output during
+                engine initialization. This is the most accurate value as it accounts
+                for hybrid attention architectures.
 
         Returns:
             Effective max_num_seqs (limited by KV cache) or None if not accessible
@@ -332,19 +477,24 @@ class AsyncVLLMAgent(BaseAgent):
         try:
             vllm_config = engine.vllm_config
             scheduler_config = vllm_config.scheduler_config
+            config_max_num_seqs = scheduler_config.max_num_seqs
+
+            # Prefer the captured log value (handles hybrid attention correctly)
+            if max_concurrency_from_log is not None:
+                kv_cache_capacity = int(max_concurrency_from_log)
+                return min(config_max_num_seqs, kv_cache_capacity)
+
+            # Fallback: manual calculation
+            # Note: This may overestimate for hybrid attention models (Gemma2, Ministral)
+            # which interleave sliding window and full attention layers
             cache_config = vllm_config.cache_config
             model_config = vllm_config.model_config
 
-            config_max_num_seqs = scheduler_config.max_num_seqs
             num_gpu_blocks = cache_config.num_gpu_blocks
             block_size = cache_config.block_size
             max_model_len = model_config.max_model_len
 
             if num_gpu_blocks and block_size and max_model_len:
-                # blocks_per_request = ceil(max_model_len / block_size)
-                # kv_cache_capacity = num_gpu_blocks / blocks_per_request
-                # Simplified: num_gpu_blocks * block_size / max_model_len
-                # This matches vLLM's logged "Maximum concurrency" value
                 kv_cache_capacity = int(num_gpu_blocks * block_size / max_model_len)
                 return min(config_max_num_seqs, kv_cache_capacity)
 
@@ -366,8 +516,11 @@ class AsyncVLLMAgent(BaseAgent):
         for model_path, engine in cls._engines.items():
             config: Dict[str, Any] = {"model_path": model_path}
 
-            # Get effective max_num_seqs
-            effective_max_num_seqs = cls._get_effective_max_num_seqs(engine)
+            # Get effective max_num_seqs (use captured log value if available)
+            max_concurrency_from_log = cls._max_concurrency_from_log.get(model_path)
+            effective_max_num_seqs = cls._get_effective_max_num_seqs(
+                engine, max_concurrency_from_log
+            )
             if effective_max_num_seqs is not None:
                 config["max_num_seqs"] = effective_max_num_seqs
 
@@ -530,10 +683,11 @@ class AsyncVLLMAgent(BaseAgent):
 
     @classmethod
     def get_effective_config(cls) -> Dict[str, Dict[str, Any]]:
-        """Get effective configuration for all initialized models."""
-        return {
-            model_path: {"engine_type": "AsyncLLMEngine"} for model_path in cls._engines
-        }
+        """Get effective configuration for all initialized models.
+
+        This is an alias for get_effective_backend_config() for backward compatibility.
+        """
+        return cls.get_effective_backend_config()
 
     async def generate(
         self,

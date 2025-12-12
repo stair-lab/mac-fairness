@@ -24,6 +24,8 @@ from .logging import (
     display_path,
     aggregate_validation_errors,
     MetricsCollector,
+    get_gpu_info,
+    format_gpu_info,
 )
 from .transcript_manager import TranscriptManager
 
@@ -41,7 +43,9 @@ __all__ = [
     "ErrorCollector",
     "ERROR_CODE_MESSAGES",
     "FlexibleAnswerMatcher",
+    "format_gpu_info",
     "format_timestamp",
+    "get_gpu_info",
     "info_print",
     "is_debug_enabled",
     "is_live_status_enabled",

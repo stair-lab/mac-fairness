@@ -18,6 +18,8 @@ from src.utils import (
     TranscriptManager,
     info_print,
     is_live_status_enabled,
+    get_gpu_info,
+    format_gpu_info,
 )
 
 
@@ -383,27 +385,75 @@ class ConversationOrchestrator:
         )
 
         # Print summary
-        info_print(f"\n{'=' * 60}", prefix=False)
-        info_print("EXPERIMENT COMPLETE", prefix=False)
-        info_print(f"{'=' * 60}", prefix=False)
-        info_print(f"Total questions: {len(questions)}", prefix=False)
-        info_print(f"Succeeded: {questions_succeeded}", prefix=False)
-        info_print(f"Partial: {questions_partial}", prefix=False)
-        info_print(f"Failed: {questions_failed}", prefix=False)
+        print(f"\n{'=' * 60}")
+        print("EXPERIMENT COMPLETE")
+        print(f"{'=' * 60}")
+
+        # Hardware & Model info
+        gpu_info = get_gpu_info()
+        print(f"GPU: {format_gpu_info(gpu_info)}")
+
+        # Model and backend config info
+        model_defs = self.config.get("model_definitions", {})
+        for model_name, model_def in model_defs.items():
+            # vLLM uses model_path, Ollama uses model_name
+            model_id = model_def.get("model_path") or model_def.get("model_name", "unknown")
+            backend = model_def.get("backend", "unknown")
+            print(f"Model: {model_id}")
+
+            if backend == "vllm":
+                vllm_config = model_def.get("vllm_config", {})
+                # Get effective max_num_seqs from backend config if available
+                effective_max_seqs = None
+                if effective_backend_config:
+                    for path, cfg in effective_backend_config.items():
+                        if model_id in path or path in model_id:
+                            effective_max_seqs = cfg.get("max_num_seqs")
+                            break
+
+                config_parts = []
+                if "max_model_len" in vllm_config:
+                    config_parts.append(f"ctx={vllm_config['max_model_len']}")
+                if effective_max_seqs:
+                    config_parts.append(f"max_num_seqs={effective_max_seqs}")
+                elif "max_num_seqs_upper_bound" in vllm_config:
+                    config_parts.append(
+                        f"max_num_seqs<={vllm_config['max_num_seqs_upper_bound']}"
+                    )
+                if "tensor_parallel_size" in vllm_config:
+                    tp = vllm_config["tensor_parallel_size"]
+                    if tp > 1:
+                        config_parts.append(f"tp={tp}")
+                if config_parts:
+                    print(f"vLLM: {', '.join(config_parts)}")
+
+            elif backend == "ollama":
+                ollama_config = model_def.get("ollama_config", {})
+                config_parts = []
+                if "num_ctx" in ollama_config:
+                    config_parts.append(f"ctx={ollama_config['num_ctx']}")
+                if config_parts:
+                    print(f"Ollama: {', '.join(config_parts)}")
+
+        print(f"{'=' * 60}")
+        print(f"Total questions: {len(questions)}")
+        print(f"Succeeded: {questions_succeeded}")
+        print(f"Partial: {questions_partial}")
+        print(f"Failed: {questions_failed}")
         if len(questions) > 0:
-            info_print(f"Success rate: {questions_succeeded / len(questions) * 100:.1f}%", prefix=False)
+            print(f"Success rate: {questions_succeeded / len(questions) * 100:.1f}%")
         else:
-            info_print("Success rate: N/A (no questions processed)", prefix=False)
-        info_print(f"Duration: {(end_time - start_time).total_seconds():.1f}s", prefix=False)
+            print("Success rate: N/A (no questions processed)")
+        print(f"Duration: {(end_time - start_time).total_seconds():.1f}s")
         if batching_metrics:
             timing = batching_metrics.get("timing", {})
             concurrency = timing.get("concurrency", {})
-            info_print(
+            print(
                 f"Requests: {batching_metrics.get('total_requests', 0)}, "
                 f"peak concurrent: {concurrency.get('peak_concurrent_requests', 0)}, "
-                f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s",
-                prefix=False,
+                f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s"
             )
+        print()  # Trailing newline
 
 
 def main():

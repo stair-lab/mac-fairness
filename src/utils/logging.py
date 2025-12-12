@@ -15,6 +15,7 @@ Environment variables:
 """
 
 import os
+import subprocess
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +95,110 @@ def status_print(msg: str) -> None:
     """
     if not is_live_status_enabled():
         print(msg)
+
+
+# =============================================================================
+# Hardware Info
+# =============================================================================
+
+
+def get_gpu_info() -> Optional[Dict[str, Any]]:
+    """Detect GPU information using nvidia-smi and CUDA_VISIBLE_DEVICES.
+
+    Returns:
+        Dictionary with GPU info or None if detection fails:
+        - name: GPU model name (e.g., "NVIDIA H100 80GB HBM3")
+        - memory_gb: Memory per GPU in GB
+        - count: Number of GPUs (respects CUDA_VISIBLE_DEVICES)
+    """
+    try:
+        # Get GPU IDs from CUDA_VISIBLE_DEVICES if set
+        cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if cuda_visible:
+            # CUDA_VISIBLE_DEVICES can be "0,1,2" or "0" or "" (empty = no GPUs)
+            if cuda_visible.strip() == "":
+                return None
+            gpu_ids = [id.strip() for id in cuda_visible.split(",")]
+            gpu_count = len(gpu_ids)
+            # Query specific GPU by ID
+            first_gpu_id = gpu_ids[0]
+            gpu_id_flag = f"--id={first_gpu_id}"
+        else:
+            # No CUDA_VISIBLE_DEVICES set, count all GPUs via nvidia-smi
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=count", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            gpu_count = int(result.stdout.strip().split("\n")[0].strip())
+            if gpu_count == 0:
+                return None
+            gpu_id_flag = None  # Query first GPU by default
+
+        # Build nvidia-smi command with optional GPU ID filter
+        name_cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+        memory_cmd = [
+            "nvidia-smi",
+            "--query-gpu=memory.total",
+            "--format=csv,noheader,nounits",
+        ]
+        if gpu_id_flag:
+            name_cmd.insert(1, gpu_id_flag)
+            memory_cmd.insert(1, gpu_id_flag)
+
+        # Get GPU name (from first visible GPU)
+        result = subprocess.run(
+            name_cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        gpu_name = result.stdout.strip().split("\n")[0].strip()
+
+        # Get memory per GPU (from first visible GPU)
+        result = subprocess.run(
+            memory_cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        memory_mb = int(result.stdout.strip().split("\n")[0].strip())
+        memory_gb = memory_mb / 1024
+
+        return {
+            "name": gpu_name,
+            "memory_gb": memory_gb,
+            "count": gpu_count,
+        }
+    except Exception:
+        return None
+
+
+def format_gpu_info(gpu_info: Optional[Dict[str, Any]]) -> str:
+    """Format GPU info for display.
+
+    Args:
+        gpu_info: Dictionary from get_gpu_info() or None
+
+    Returns:
+        Formatted string like "2x NVIDIA H100 (80GB)" or "Unknown"
+    """
+    if not gpu_info:
+        return "Unknown"
+
+    count = gpu_info.get("count", 1)
+    name = gpu_info.get("name", "Unknown GPU")
+    memory_gb = gpu_info.get("memory_gb", 0)
+
+    # Simplify GPU name (remove "NVIDIA " prefix if present)
+    if name.startswith("NVIDIA "):
+        name = name[7:]
+
+    if count > 1:
+        return f"{count}x {name} ({memory_gb:.0f}GB)"
+    else:
+        return f"{name} ({memory_gb:.0f}GB)"
 
 
 # =============================================================================
