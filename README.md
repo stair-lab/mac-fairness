@@ -96,6 +96,11 @@ $MAC_FAIRNESS_WORKSPACE/
 │       ├── package.json                    # Node.js dependencies
 │       └── tsconfig.json                   # TypeScript configuration
 │
+├── config/                                 # Working configuration files (edit here)
+│   └── {benchmark_subcategory or custom}/  # Organize by benchmark subcategory, e.g., bbq_race, discrim_eval_age, or customized, e.g., production_vllm
+│       ├── {experiment_name}_scratch.yaml  # Regular config file
+│       └── {experiment_name}_grid.yaml     # Grid config for parameter sweeps
+│
 ├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
 │   ├── index.jsonl                         # Append-only index for production experiments
 │   ├── dev_{backend}_index.jsonl           # Separate index for dev_{backend} pilot experiments, e.g., dev_vllm
@@ -103,7 +108,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │       └── {benchmark_subcategory}/        # Organized by benchmark subcategory
 │
 ├── experiment/                             # Experiment outputs (transcripts and summaries)
-│   └── {benchmark_subcategory}/            # e.g., bbq_race, discrim_eval_age
+│   └── {benchmark_subcategory}/            # Organized by benchmark subcategory
 │       └── {experiment_name}/
 │           ├── transcript/                 # Conversation transcripts (one per question)
 │           │   └── {uuid}.json
@@ -111,12 +116,6 @@ $MAC_FAIRNESS_WORKSPACE/
 │           │   └── {timestamp}_{job_task_id}.json
 │           └── job_summary/                # Job execution summaries (one per job run)
 │               └── {timestamp}_{job_task_id}.json
-│
-├── config/                                 # Working configuration files (edit here)
-│   ├── {benchmark_subcategory}/            # Organized by benchmark subcategory
-│   │   └── {experiment_name}_scratch.yaml  # Editable config files
-│   ├── dev_ollama/                         # Dev configurations (Ollama, no GPU required)
-│   └── dev_vllm/                           # Dev configurations (vLLM, GPU required)
 │
 ├── data/                                   # Benchmark questions in unified format
 │   ├── BBQ/                                # BBQ benchmark family

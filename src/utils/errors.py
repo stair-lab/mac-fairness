@@ -469,6 +469,55 @@ class OllamaNotAvailableError(OllamaError):
         )
 
 
+# Manifest Errors
+class ManifestError(MacFairnessError):
+    """Base class for manifest-related errors."""
+
+    def __init__(
+        self,
+        message: str,
+        manifest_path: Optional[str] = None,
+        error_code: str = "MANIFEST_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        details = details or {}
+        if manifest_path:
+            details["manifest_path"] = manifest_path
+        super().__init__(message=message, error_code=error_code, details=details)
+
+
+class ManifestParseError(ManifestError):
+    """Raised when manifest JSON parsing fails."""
+
+    def __init__(self, manifest_path: str, original_error: Optional[Exception] = None):
+        details = {}
+        if original_error:
+            details["original_error"] = str(original_error)
+            details["original_error_type"] = type(original_error).__name__
+        super().__init__(
+            message=f"Failed to parse manifest: {manifest_path}",
+            manifest_path=manifest_path,
+            error_code="MANIFEST_PARSE_ERROR",
+            details=details,
+        )
+
+
+class ManifestWriteError(ManifestError):
+    """Raised when manifest file write fails."""
+
+    def __init__(self, manifest_path: str, original_error: Optional[Exception] = None):
+        details = {}
+        if original_error:
+            details["original_error"] = str(original_error)
+            details["original_error_type"] = type(original_error).__name__
+        super().__init__(
+            message=f"Failed to write manifest: {manifest_path}",
+            manifest_path=manifest_path,
+            error_code="MANIFEST_WRITE_ERROR",
+            details=details,
+        )
+
+
 # Error Aggregation Utilities
 class ErrorCollector:
     """Collects and aggregates errors during processing."""
@@ -514,7 +563,7 @@ class ErrorCollector:
         return len(self.errors) > 0
 
 
-# Retry handler
+# Retry handler (placeholder for now)
 class RetryHandler:
     """Handles retry logic with error tracking."""
 

@@ -5,10 +5,10 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional, TextIO
+from typing import Dict, List, Any, Optional, TextIO, Tuple
 from collections import Counter
 
-from src.utils.errors import ProjectRootError
+from src.utils.errors import ManifestParseError, ManifestWriteError, ProjectRootError
 from src.utils.logging import (
     EXPERIMENT_ROOT_ENV,
     display_path,
@@ -751,6 +751,60 @@ class BookkeepingManager:
                 pass
         return False
 
+    def find_job_manifest_and_get_null_questions(
+        self,
+        experiment_name: str,
+        benchmark_subcategory: str,
+    ) -> Optional[Tuple[Path, List[str], str]]:
+        """Find the most recent job manifest for an experiment and get null question IDs.
+
+        Used for resuming interrupted runs: finds questions that didn't succeed
+        so they can be re-run while skipping succeeded ones.
+
+        Args:
+            experiment_name: Name of the experiment
+            benchmark_subcategory: Benchmark category
+
+        Returns:
+            Tuple of (manifest_path, null_question_ids, config_snapshot_path) or None if no manifest found.
+            null_question_ids are questions with status != "succeeded".
+            config_snapshot_path is the path to the config snapshot used for this job.
+        """
+        exp_root_path = self.get_experiment_root()
+        manifest_dir = exp_root_path / benchmark_subcategory / experiment_name / "job_manifest"
+
+        if not manifest_dir.exists():
+            return None
+
+        # Find all manifests for this experiment
+        manifests = list(manifest_dir.glob("*.json"))
+        if not manifests:
+            return None
+
+        # Get most recently modified
+        latest_manifest = max(manifests, key=lambda p: p.stat().st_mtime)
+
+        try:
+            with open(latest_manifest, "r") as f:
+                manifest = json.load(f)
+        except json.JSONDecodeError as e:
+            info_print(f"Warning: Could not parse job manifest {latest_manifest.name}: {e}")
+            return None
+        except OSError as e:
+            info_print(f"Warning: Could not read job manifest {latest_manifest.name}: {e}")
+            return None
+
+        # Extract null question IDs (not succeeded)
+        null_question_ids = []
+        for q in manifest.get("questions", []):
+            if q.get("status") != "succeeded":
+                qid = q.get("question_id", f"q_{q.get('index', '?')}")
+                null_question_ids.append(qid)
+
+        config_snapshot_path = manifest.get("config_snapshot_path", "")
+
+        return latest_manifest, null_question_ids, config_snapshot_path
+
 
 class StreamingJobSummary:
     """Manages a streaming job summary that updates in real-time.
@@ -939,3 +993,311 @@ class StreamingJobSummary:
     def get_path(self) -> Optional[Path]:
         """Get the path to the summary file."""
         return self._summary_path
+
+
+class GridManifestManager:
+    """Manages grid manifest for tracking multi-configuration grid runs.
+
+    A grid manifest tracks the progress of a grid configuration run,
+    recording which configurations have been started, completed, or failed.
+    This enables resuming interrupted grid runs.
+    """
+
+    def __init__(self, project_root: Optional[Path] = None):
+        """Initialize the grid manifest manager.
+
+        Args:
+            project_root: Project root directory (auto-detected if None)
+        """
+        if project_root is None:
+            current = Path(__file__).resolve()
+            while current != current.parent:
+                if (current / "pyproject.toml").exists():
+                    self.project_root = current
+                    break
+                current = current.parent
+            else:
+                raise ProjectRootError()
+        else:
+            self.project_root = project_root
+
+    def _get_manifest_dir(self) -> Path:
+        """Get directory for grid manifests."""
+        return self.project_root / "bookkeeping" / "grid_manifest"
+
+    def save_grid_manifest(
+        self,
+        grid_config_path: str,
+        expanded_configs: list,
+        submission_timestamp: datetime,
+    ) -> Path:
+        """Save a grid manifest at the start of a grid run.
+
+        Args:
+            grid_config_path: Path to the original grid config file
+            expanded_configs: List of (config, grid_sweep_specs) tuples from GridConfigExpander
+            submission_timestamp: When the grid run started
+
+        Returns:
+            Path to the saved manifest file
+        """
+        manifest_dir = self._get_manifest_dir()
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp_str = format_filename_timestamp(submission_timestamp)
+        job_task_id = get_job_task_id()
+        manifest_path = manifest_dir / f"{timestamp_str}_{job_task_id}.json"
+
+        # Build experiment run entries
+        experiment_runs = []
+        for i, (config, grid_sweep_specs) in enumerate(expanded_configs):
+            exp_meta = config.get("experiment_metadata", {})
+            experiment_runs.append({
+                "run_id": i,
+                "experiment_name": exp_meta.get("experiment_name", "unknown"),
+                "benchmark_subcategory": exp_meta.get("benchmark_subcategory", "unknown"),
+                "grid_sweep_specs": grid_sweep_specs,
+                "status": None,  # null = not started
+                "started_at": None,
+                "completed_at": None,
+            })
+
+        manifest = {
+            "grid_config_path": str(grid_config_path),
+            "job_task_id": job_task_id,
+            "submission_timestamp": format_timestamp(submission_timestamp),
+            "num_runs_planned": len(experiment_runs),
+            "num_runs_processed": 0,
+            "experiment_runs": experiment_runs,
+            "created_at": format_timestamp(datetime.now(timezone.utc)),
+        }
+
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        info_print(f"Grid manifest saved: {display_path(manifest_path, self.project_root)}")
+        return manifest_path
+
+    def mark_run_started(self, manifest_path: Path, run_id: int) -> None:
+        """Mark an experiment run as started.
+
+        Status values:
+        - null: not yet run, or stopped abruptly (needs re-run)
+        - "started": job started, may be interrupted (check job manifest for repair)
+        - "processed": job finished naturally (don't re-run)
+
+        Args:
+            manifest_path: Path to the manifest file
+            run_id: ID of the experiment run being started
+        """
+        if not manifest_path.exists():
+            return
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except json.JSONDecodeError as e:
+            info_print(f"Warning: Could not parse grid manifest: {e}")
+            return
+        except OSError as e:
+            info_print(f"Warning: Could not read grid manifest: {e}")
+            return
+
+        runs = manifest.get("experiment_runs", [])
+        if 0 <= run_id < len(runs):
+            runs[run_id]["status"] = "started"
+            runs[run_id]["started_at"] = format_timestamp(
+                datetime.now(timezone.utc)
+            )
+
+        try:
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f, indent=2)
+        except OSError as e:
+            info_print(f"Warning: Could not write grid manifest: {e}")
+
+    def mark_run_processed(self, manifest_path: Path, run_id: int) -> None:
+        """Mark an experiment run as processed (job finished naturally).
+
+        Status values:
+        - null: not yet run, or stopped abruptly (needs re-run)
+        - "started": job started, may be interrupted (check job manifest for repair)
+        - "processed": job finished naturally (don't re-run)
+
+        Args:
+            manifest_path: Path to the manifest file
+            run_id: ID of the experiment run that finished
+        """
+        if not manifest_path.exists():
+            return
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except json.JSONDecodeError as e:
+            info_print(f"Warning: Could not parse grid manifest: {e}")
+            return
+        except OSError as e:
+            info_print(f"Warning: Could not read grid manifest: {e}")
+            return
+
+        runs = manifest.get("experiment_runs", [])
+        if 0 <= run_id < len(runs):
+            runs[run_id]["status"] = "processed"
+            runs[run_id]["completed_at"] = format_timestamp(
+                datetime.now(timezone.utc)
+            )
+
+        # Update processed count
+        manifest["num_runs_processed"] = manifest.get("num_runs_processed", 0) + 1
+
+        try:
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f, indent=2)
+        except OSError as e:
+            info_print(f"Warning: Could not write grid manifest: {e}")
+
+    def get_pending_indices(self, manifest_path: Path) -> list:
+        """Get indices of configurations that haven't been processed.
+
+        Returns indices where status is null or "started" (not "processed").
+
+        Args:
+            manifest_path: Path to the manifest file
+
+        Returns:
+            List of configuration indices that need to be run
+        """
+        if not manifest_path.exists():
+            return []
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except json.JSONDecodeError as e:
+            info_print(f"Warning: Could not parse grid manifest: {e}")
+            return []
+        except OSError as e:
+            info_print(f"Warning: Could not read grid manifest: {e}")
+            return []
+
+        pending = []
+        for run in manifest.get("experiment_runs", []):
+            if run.get("status") != "processed":
+                pending.append(run["run_id"])
+        return pending
+
+    def is_complete(self, manifest_path: Path) -> bool:
+        """Check if all configurations have been processed.
+
+        Args:
+            manifest_path: Path to the manifest file
+
+        Returns:
+            True if all configurations have status="processed"
+        """
+        if not manifest_path.exists():
+            return True
+
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+        except json.JSONDecodeError as e:
+            info_print(f"Warning: Could not parse grid manifest: {e}")
+            return False
+        except OSError as e:
+            info_print(f"Warning: Could not read grid manifest: {e}")
+            return False
+
+        configs = manifest.get("experiment_runs", [])
+        return all(c.get("status") == "processed" for c in configs)
+
+    def delete_if_complete(self, manifest_path: Path) -> bool:
+        """Delete manifest if all configurations have been processed.
+
+        Args:
+            manifest_path: Path to the manifest file
+
+        Returns:
+            True if manifest was deleted
+        """
+        if self.is_complete(manifest_path):
+            try:
+                manifest_path.unlink(missing_ok=True)
+                info_print(
+                    f"Grid manifest deleted (all succeeded): "
+                    f"{display_path(manifest_path, self.project_root)}"
+                )
+                return True
+            except OSError as e:
+                info_print(f"Warning: Could not delete grid manifest: {e}")
+        return False
+
+    def load_and_delete_manifest(
+        self, grid_config_path: str
+    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]]]]:
+        """Load pending configurations from existing manifest and delete it.
+
+        Finds the most recent manifest for this grid config, extracts pending
+        configuration indices (those without status="processed"), deletes the
+        manifest, and returns the pending indices along with info for "started"
+        runs (needed to find their job manifests for resume).
+
+        Args:
+            grid_config_path: Path to the grid config file
+
+        Returns:
+            Tuple of (pending_indices, started_run_info) or None if no manifest found.
+            started_run_info maps run_id to {"experiment_name", "benchmark_subcategory"}
+            for runs with status="started" (interrupted runs that may have partial progress).
+        """
+        manifest_dir = self._get_manifest_dir()
+        if not manifest_dir.exists():
+            return None
+
+        # Find all manifests that match this grid config
+        matching_manifests = []
+        for manifest_file in manifest_dir.glob("*.json"):
+            try:
+                with open(manifest_file, "r") as f:
+                    manifest = json.load(f)
+                if manifest.get("grid_config_path") == str(grid_config_path):
+                    matching_manifests.append((manifest_file, manifest))
+            except json.JSONDecodeError as e:
+                info_print(f"Warning: Could not parse manifest {manifest_file.name}: {e}")
+                continue
+            except OSError as e:
+                info_print(f"Warning: Could not read manifest {manifest_file.name}: {e}")
+                continue
+
+        if not matching_manifests:
+            return None
+
+        # Get most recently modified
+        latest_path, latest_manifest = max(
+            matching_manifests, key=lambda x: x[0].stat().st_mtime
+        )
+
+        # Extract pending run IDs and info for "started" runs
+        pending: List[int] = []
+        started_run_info: Dict[int, Dict[str, str]] = {}
+        for run in latest_manifest.get("experiment_runs", []):
+            status = run.get("status")
+            if status != "processed":
+                run_id = run["run_id"]
+                pending.append(run_id)
+                # For "started" runs, save info needed to find job manifest
+                if status == "started":
+                    started_run_info[run_id] = {
+                        "experiment_name": run.get("experiment_name", ""),
+                        "benchmark_subcategory": run.get("benchmark_subcategory", ""),
+                    }
+
+        # Delete the old manifest
+        try:
+            latest_path.unlink()
+            info_print(f"Old manifest deleted: {latest_path.name}")
+        except OSError as e:
+            info_print(f"Warning: Could not delete old manifest: {e}")
+
+        return pending, started_run_info

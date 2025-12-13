@@ -247,7 +247,7 @@ else:
 
 ## Configuration for Error Handling
 
-Control error behavior via `retry_config` in your experiment configuration:
+Control error behavior via `retry_config` in the experiment configuration:
 
 ```yaml
 retry_config:
