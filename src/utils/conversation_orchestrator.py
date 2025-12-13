@@ -5,7 +5,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set, Tuple
+from typing import Dict, List, Optional, Any, Set
 
 from src.agent import ModelFactory
 from src.routing import VanillaRouter
@@ -13,7 +13,6 @@ from src.prompt.participant import ParticipantPromptBuilder
 from src.utils import (
     BookkeepingManager,
     ConfigManager,
-    ConfigurationError,
     MetricsCollector,
     ProjectRootError,
     TranscriptManager,
@@ -222,7 +221,6 @@ class ConversationOrchestrator:
 
     async def run_experiment(
         self,
-        question_range: Optional[Tuple[int, int]] = None,
         question_ids: Optional[Set[str]] = None,
     ):
         """Run experiment with async parallel conversation processing.
@@ -231,7 +229,6 @@ class ConversationOrchestrator:
         Backend handles request queuing and batching (vLLM's max_num_seqs).
 
         Args:
-            question_range: Optional tuple of (start_idx, end_idx) for question subset
             question_ids: Optional set of question IDs to process (for resume)
         """
         start_time = datetime.now(timezone.utc)
@@ -245,7 +242,6 @@ class ConversationOrchestrator:
 
         try:
             await self._run_experiment_inner(
-                question_range=question_range,
                 question_ids=question_ids,
                 start_time=start_time,
             )
@@ -254,7 +250,6 @@ class ConversationOrchestrator:
 
     async def _run_experiment_inner(
         self,
-        question_range: Optional[Tuple[int, int]],
         question_ids: Optional[Set[str]],
         start_time: datetime,
     ):
@@ -272,16 +267,7 @@ class ConversationOrchestrator:
 
         info_print(f"Loaded {len(all_questions)} questions from {questions_file.name}")
 
-        if question_range and question_ids:
-            raise ConfigurationError("Cannot specify both question_range and question_ids")
-
-        if question_range:
-            start_idx, end_idx = question_range
-            questions = all_questions[start_idx:end_idx]
-            info_print(
-                f"Processing range {start_idx}-{end_idx} ({len(questions)} questions)"
-            )
-        elif question_ids:
+        if question_ids:
             questions = [q for q in all_questions if q.get("question_id") in question_ids]
             info_print(f"Processing {len(questions)} questions by ID filter")
         else:
@@ -343,9 +329,8 @@ class ConversationOrchestrator:
             question = questions[question_idx]
             question_id = question.get("question_id", f"q_{question_idx}")
 
-            # Save transcript immediately
+            # Save transcript immediately (can be lost on interrupt, recoverable)
             self.transcript_manager.save_transcript(transcript)
-            self.transcript_manager.append_to_index(transcript, question, self.config)
 
             # Collect statistics
             transcript_stat = self._extract_transcript_stats(transcript, question_id)
@@ -362,9 +347,19 @@ class ConversationOrchestrator:
             # Update streaming summary (writes to disk)
             streaming_summary.record_completion(transcript_stat, error_info)
 
-            # Mark question as processed in manifest (tracks progress and success status)
-            self.bookkeeping.mark_question_processed(
-                self.manifest_path, question_id, succeeded=(status == "succeeded")
+            # Atomically record completion in both manifest and index
+            # This ensures consistency: either both are updated or neither
+            benchmark = self.config["experiment_metadata"]["benchmark_subcategory"]
+            index_path = self.transcript_manager.get_index_path(benchmark)
+            index_entry = self.transcript_manager.build_index_entry(
+                transcript, question, self.config
+            )
+            self.bookkeeping.record_question_completion(
+                manifest_path=self.manifest_path,
+                question_id=question_id,
+                succeeded=(status == "succeeded"),
+                index_path=index_path,
+                index_entry=index_entry,
             )
 
             # Only print progress if live status display is not enabled
@@ -395,7 +390,6 @@ class ConversationOrchestrator:
             questions_failed=streaming_summary.questions_failed,
             start_time=start_time,
             end_time=end_time,
-            question_range=question_range,
             error_summary=error_summary if error_summary else None,
             per_transcript_stats=per_transcript_stats if per_transcript_stats else None,
             config_snapshot_path=self.snapshot_path,
@@ -479,7 +473,7 @@ class ConversationOrchestrator:
             )
         if not manifest_deleted:
             print(f"\nSome questions need repair. To resume:")
-            print(f"  python script/repair.py resume {self.manifest_path}")
+            print(f"[ENV_VARS] python script/repair_job.py resume {self.manifest_path} [--dry-run]")
         print()  # Trailing newline
 
 
@@ -495,30 +489,12 @@ def main():
         type=str,
         help="Path to configuration YAML file",
     )
-    parser.add_argument(
-        "--range",
-        type=str,
-        help="Question range in format 'start:end' (e.g., '0:10')",
-    )
 
     args = parser.parse_args()
 
-    # Parse range if provided
-    question_range = None
-    if args.range:
-        parts = args.range.split(":")
-        if len(parts) == 2:
-            try:
-                start = int(parts[0])
-                end = int(parts[1])
-                question_range = (start, end)
-            except ValueError:
-                info_print(f"Invalid range format: {args.range}")
-                return
-
     # Run experiment
     orchestrator = ConversationOrchestrator(args.config)
-    asyncio.run(orchestrator.run_experiment(question_range=question_range))
+    asyncio.run(orchestrator.run_experiment())
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
 """Transcript building and persistence utilities."""
 
 import json
-import fcntl
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from src.utils.errors import ProjectRootError
+from src.utils.bookkeeping_manager import get_current_job_task_id
 from src.utils.logging import (
     EXPERIMENT_ROOT_ENV,
     aggregate_validation_errors,
@@ -158,14 +158,7 @@ class TranscriptManager:
             messages_requiring_retries += 1
 
         # Build job_task_id
-        slurm_job = os.environ.get("SLURM_JOB_ID")
-        slurm_task = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if slurm_job and slurm_task:
-            job_task_id = f"{slurm_job}_{slurm_task}"
-        elif slurm_job:
-            job_task_id = slurm_job
-        else:
-            job_task_id = "local"
+        job_task_id = get_current_job_task_id()
 
         # Build experiment_metadata (always includes question_id)
         experiment_metadata = {
@@ -261,35 +254,41 @@ class TranscriptManager:
             )
         return str(transcript_path)
 
-    def append_to_index(
+    def get_index_path(self, benchmark: str) -> Path:
+        """Get the index file path for a benchmark.
+
+        Args:
+            benchmark: Benchmark subcategory name
+
+        Returns:
+            Path to the appropriate index.jsonl file
+        """
+        # Use separate index for dev benchmarks, production uses main index
+        # All are in bookkeeping/ directory
+        if benchmark == "dev_ollama":
+            return self.project_root / "bookkeeping" / "dev_ollama_index.jsonl"
+        elif benchmark == "dev_vllm":
+            return self.project_root / "bookkeeping" / "dev_vllm_index.jsonl"
+        else:
+            return self.project_root / "bookkeeping" / "index.jsonl"
+
+    def build_index_entry(
         self,
         transcript: Dict[str, Any],
         question: Dict[str, Any],
         config: Dict[str, Any],
-    ):
-        """Append transcript information to JSONL index.
+    ) -> Dict[str, Any]:
+        """Build an index entry for a completed transcript.
 
         Args:
             transcript: Complete transcript
             question: Original question
             config: Full configuration dictionary
+
+        Returns:
+            Index entry dictionary ready to be appended to index.jsonl
         """
         benchmark = config["experiment_metadata"]["benchmark_subcategory"]
-
-        # Use separate index for dev benchmarks, production uses main index
-        # All are in bookkeeping/ directory
-        if benchmark == "dev_ollama":
-            index_path = self.project_root / "bookkeeping" / "dev_ollama_index.jsonl"
-        elif benchmark == "dev_vllm":
-            index_path = self.project_root / "bookkeeping" / "dev_vllm_index.jsonl"
-        else:
-            index_path = self.project_root / "bookkeeping" / "index.jsonl"
-
-        # Create if doesn't exist
-        if not index_path.exists():
-            index_path.touch()
-
-        # Build index entry
         exp_meta = config["experiment_metadata"]
         conversation_config = config["conversation_config"]
         identity_config = config["identity_reveal_config"]
@@ -318,7 +317,7 @@ class TranscriptManager:
             "config_snapshot_path"
         ]
 
-        index_entry = {
+        return {
             "transcript_id": transcript["transcript_id"],
             "experiment_name": exp_meta["experiment_name"],
             "benchmark_subcategory": benchmark,
@@ -344,14 +343,6 @@ class TranscriptManager:
             "retry_attempts": summary["retry_statistics"]["total_retry_attempts"],
             "fatal_error": self._strip_error_details(summary.get("error_info")),
         }
-
-        # Write with file locking
-        with open(index_path, "a") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                f.write(json.dumps(index_entry) + "\n")
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def _strip_error_details(
         self, error_info: Optional[Dict[str, Any]]

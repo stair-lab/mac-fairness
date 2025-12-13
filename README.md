@@ -1,6 +1,6 @@
 # Multi-Agent Conversation Framework for Fairness Evaluation
 
-A lightweight, Slurm-compatible framework for running multi-agent conversations with structured output validation. Agents can be instantiated from different model families (Gemma, Llama, Qwen, etc.) with configurable roles, personas, and demographics.
+A lightweight framework for running multi-agent conversations with structured output validation. Agents can be instantiated from different model families (Gemma, Llama, Qwen, etc.) with configurable roles, personas, and demographics.
 
 > **New to this project?** Start with the [dev_ollama_walkthrough.ipynb](docs/guide/dev_ollama_walkthrough.ipynb) - a complete demo you can run locally without GPU using Ollama.
 
@@ -32,16 +32,9 @@ uv pip install -e .
 # 3. Set experiments directory (recommended, otherwise defaults to $MAC_FAIRNESS_WORKSPACE/experiment)
 export MAC_FAIRNESS_EXPERIMENT_ROOT="/path/to/save/experiments"
 
-# 4. Run a real experiment locally or submit to Slurm
-# Local execution:
+# 4. Run a real experiment
 [ENV_VARS] python script/run_experiment.py config/bbq_race/llama33_70b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 # e.g., CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 python ...
-
-# Slurm submission (creates snapshot at queuing time):
-./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml
-
-# Slurm array job (divides questions evenly among tasks):
-./script/cluster/submit_slurm.sh config/bbq_race/{experiment_name}_scratch.yaml --array-tasks 20
 
 # 5. Query results
 # TODO
@@ -86,47 +79,67 @@ uv pip install -e .
 ```text
 $MAC_FAIRNESS_WORKSPACE/
 │
-├── README.md
-├── pyproject.toml                          # Project dependencies
-│
-├── schema/                                 # Protocol schemas (versioned, documentation only)
-│   ├── index.json                          # Schema version registry
-│   └── 2025-12-10/                         # Current protocol version (follows MCP convention)
-│       ├── schemas.ts                      # Zod schema definitions (documentation reference)
-│       ├── package.json                    # Node.js dependencies
-│       └── tsconfig.json                   # TypeScript configuration
+├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
+│   ├── config_snapshot/                    # Immutable config snapshots from submitted jobs
+│   │   └── {benchmark_subcategory}/        # Organized by benchmark subcategory
+│   ├── grid_config_snapshot/               # Immutable grid config snapshots for resume
+│   │   └── {config_name}_{timestamp}.yaml
+│   ├── grid_manifest/                      # Grid manifests for interrupted grid run recovery
+│   │   └── {timestamp}_{pid}.json
+│   ├── dev_{backend}_index.jsonl           # Separate index for dev_{backend} pilot experiments, e.g., dev_vllm
+│   └── index.jsonl                         # Append-only index for production experiments
 │
 ├── config/                                 # Working configuration files (edit here)
 │   └── {benchmark_subcategory or custom}/  # Organize by benchmark subcategory, e.g., bbq_race, discrim_eval_age, or customized, e.g., production_vllm
-│       ├── {experiment_name}_scratch.yaml  # Regular config file
-│       └── {experiment_name}_grid.yaml     # Grid config for parameter sweeps
-│
-├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
-│   ├── index.jsonl                         # Append-only index for production experiments
-│   ├── dev_{backend}_index.jsonl           # Separate index for dev_{backend} pilot experiments, e.g., dev_vllm
-│   └── config_snapshot/                    # Immutable config snapshots from submitted jobs
-│       └── {benchmark_subcategory}/        # Organized by benchmark subcategory
-│
-├── experiment/                             # Experiment outputs (transcripts and summaries)
-│   └── {benchmark_subcategory}/            # Organized by benchmark subcategory
-│       └── {experiment_name}/
-│           ├── transcript/                 # Conversation transcripts (one per question)
-│           │   └── {uuid}.json
-│           ├── job_manifest/               # Job manifests for interrupted run recovery
-│           │   └── {timestamp}_{job_task_id}.json
-│           └── job_summary/                # Job execution summaries (one per job run)
-│               └── {timestamp}_{job_task_id}.json
+│       ├── {experiment_name}_grid.yaml     # Grid config for parameter sweeps
+│       └── {experiment_name}_scratch.yaml  # Regular config file
 │
 ├── data/                                   # Benchmark questions in unified format
 │   ├── BBQ/                                # BBQ benchmark family
 │   ├── DifferenceAwareness/                # DifferenceAwareness benchmark suite
 │   └── DiscrimEval/                        # DiscrimEval benchmark family
 │
+├── docs/                                   # Documentation
+│   ├── advanced/                           # Advanced topics (detailed guides)
+│   │   ├── async-framework.md              # Async scheduling and GPU utilization
+│   │   ├── error-handling.md               # Error handling and recovery mechanisms
+│   │   ├── grid-experiments.md             # Parameter sweeps and grid configuration
+│   │   ├── job-recovery.md                 # Job manifests and resuming interrupted runs
+│   │   └── prompt-templates.md             # Prompt engineering and template design
+│   └── guide/
+│       └── dev_ollama_walkthrough.ipynb    # Local development testing with Ollama (no GPU required)
+│
+├── experiment/                             # Experiment outputs (transcripts and summaries)
+│   └── {benchmark_subcategory}/            # Organized by benchmark subcategory
+│       └── {experiment_name}/
+│           ├── job_manifest/               # Job manifests for interrupted run recovery
+│           │   └── {timestamp}_{job_task_id}.json
+│           ├── job_summary/                # Job execution summaries (one per job run)
+│           │   └── {timestamp}_{job_task_id}.json
+│           └── transcript/                 # Conversation transcripts (one per question)
+│               └── {uuid}.json
+│
+├── schema/                                 # Protocol schemas (versioned, documentation only)
+│   ├── 2025-12-10/                         # Current protocol version (follows MCP convention)
+│   │   ├── package.json                    # Node.js dependencies
+│   │   ├── schemas.ts                      # Zod schema definitions (documentation reference)
+│   │   └── tsconfig.json                   # TypeScript configuration
+│   └── index.json                          # Schema version registry
+│
+├── script/                                 # Executable scripts
+│   ├── cluster/                            # Cluster utilities
+│   │   ├── build_flashinfer.sh             # FlashInfer build script
+│   │   └── download_models.sh              # Model downloading utilities
+│   ├── formatter/                          # Benchmark data formatter
+│   │   └── bbq_formatter.py                # BBQ benchmark formatter
+│   ├── repair_job.py                       # Analyze and resume interrupted job runs
+│   └── run_experiment.py                   # Run full experiment (all questions)
+│
 ├── src/                                    # Source code
 │   ├── agent/                              # Agent implementations
-│   │   ├── base_agent.py                   # Abstract base class with shared functionality
 │   │   ├── async_ollama_agent.py           # Async Ollama agent for local dev (no GPU required)
 │   │   ├── async_vllm_agent.py             # Async vLLM agent for production (GPU required)
+│   │   ├── base_agent.py                   # Abstract base class with shared functionality
 │   │   └── model_factory.py                # Smart backend detection and agent creation
 │   │
 │   ├── prompt/                             # Prompt builders
@@ -137,34 +150,19 @@ $MAC_FAIRNESS_WORKSPACE/
 │   │   └── vanilla_router.py               # Simple round-based routing with full visibility
 │   │
 │   └── utils/                              # Core utilities
-│       ├── conversation_orchestrator.py    # Main experiment orchestration (async entry point)
-│       ├── request_scheduler.py            # GPU-efficient request scheduling
-│       ├── async_conversation_runner.py    # Per-conversation async execution logic
-│       ├── config_manager.py               # Configuration loading and validation
-│       ├── transcript_manager.py           # Transcript building and saving
-│       ├── bookkeeping_manager.py          # Directory and job summary management
 │       ├── answer_matcher.py               # Flexible answer matching
+│       ├── async_conversation_runner.py    # Per-conversation async execution logic
+│       ├── bookkeeping_manager.py          # Directory and job summary management
+│       ├── config_manager.py               # Configuration loading and validation
+│       ├── conversation_orchestrator.py    # Main experiment orchestration (async entry point)
+│       ├── errors.py                       # Error class hierarchy
+│       ├── grid_config.py                  # Grid configuration expansion for parameter sweeps
 │       ├── logging.py                      # Centralized logging, metrics, and error aggregation
-│       └── errors.py                       # Error class hierarchy
+│       ├── request_scheduler.py            # GPU-efficient request scheduling
+│       └── transcript_manager.py           # Transcript building and saving
 │
-├── script/                                 # Executable scripts
-│   ├── run_experiment.py                   # Run full experiment (all questions)
-│   ├── repair.py                           # Analyze and resume interrupted runs
-│   ├── cluster/                            # Cluster/Slurm utilities
-│   │   ├── submit_slurm.sh                 # Submit to Slurm (creates config snapshot)
-│   │   ├── download_models.sh              # Model downloading utilities
-│   │   └── build_flashinfer.sh             # FlashInfer build script
-│   └── formatter/                          # Benchmark data formatter
-│       └── bbq_formatter.py                # BBQ benchmark formatter
-│
-└── docs/                                   # Documentation
-    ├── advanced/                           # Advanced topics (detailed guides)
-    │   ├── async-framework.md              # Async scheduling and GPU utilization
-    │   ├── error-handling.md               # Error handling and recovery mechanisms
-    │   ├── job-recovery.md                 # Job manifests and resuming interrupted runs
-    │   └── prompt-templates.md             # Prompt engineering and template design
-    └── guide/
-        └── dev_ollama_walkthrough.ipynb    # Local development testing with Ollama (no GPU required)
+├── pyproject.toml                          # Project dependencies
+└── README.md
 ```
 
 ### Division of Responsibilities
@@ -173,8 +171,7 @@ $MAC_FAIRNESS_WORKSPACE/
 
 - Loads and validates experiment configurations (Python-based validation)
 - Saves immutable config snapshots to `bookkeeping/config_snapshot/{benchmark_subcategory}/`
-  - For Slurm: Snapshot saved at queuing time (before job execution)
-  - For local: Snapshot saved at start of `run_experiment()` method
+  - Snapshot saved at start of `run_experiment()` method
 - Manages agent initialization and conversation orchestration
 - Saves full conversation transcripts to `experiment/{benchmark_subcategory}/{experiment_name}/transcript/`
 - Updates `bookkeeping/index.jsonl` with thread-safe file locking
@@ -448,19 +445,6 @@ python script/formatter/discrim_eval_formatter.py \
 ```bash
 # Run locally (snapshot saved at start, then executed immediately)
 [ENV_VARS] python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
-
-# Process specific question range (useful for dev_ testing)
-[ENV_VARS] python script/run_experiment.py config/dev_vllm/llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10_scratch.yaml --range 0-10
-```
-
-### Slurm Submission
-
-```bash
-# Submit single job to Slurm (snapshot saved at queuing time)
-./script/cluster/submit_slurm.sh config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
-
-# Submit array job (divides questions evenly among tasks)
-./script/cluster/submit_slurm.sh config/bbq_race/llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10_scratch.yaml --array-tasks 5
 ```
 
 **Execution workflow:**
@@ -473,13 +457,6 @@ python script/formatter/discrim_eval_formatter.py \
 1. Save transcripts to `{MAC_FAIRNESS_EXPERIMENT_ROOT}/{benchmark_subcategory}/{experiment_name}/transcript/{uuid}.json`
 1. Append to `bookkeeping/index.jsonl` with metadata for each transcript
 1. Generate job summary with execution statistics, metrics, and error aggregation
-
-**Config snapshot behavior:**
-
-- For Slurm: Shell script creates config snapshot **immediately** at queuing time
-- We can safely edit the scratch file immediately after submission
-- When job runs, Python script loads the snapshot (not scratch file)
-- For array jobs: **One snapshot per submission**, shared by all array tasks
 
 ---
 
@@ -498,10 +475,10 @@ To resume an interrupted run:
 
 ```bash
 # Analyze the manifest (no GPU required)
-python script/repair.py analyze experiment/{benchmark}/{experiment}/job_manifest/{manifest}.json
+python script/repair_job.py analyze experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/{manifest}.json
 
 # Resume null questions
-[ENV_VARS] python script/repair.py resume experiment/{benchmark}/{experiment}/job_manifest/{manifest}.json
+[ENV_VARS] python script/repair_job.py resume experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/{manifest}.json
 ```
 
 ### Transcripts
@@ -518,7 +495,7 @@ Each transcript file (one per conversation) contains:
 
 **Key fields:**
 
-- `experiment_metadata.job_task_id`: Unified job identifier ("local", "10000", or "10001_2" for array tasks)
+- `experiment_metadata.job_task_id`: Job identifier based on process ID ("{pid}" or "{pid}\_{grid_index}" for grid runs)
 - `message_metadata.matched_answer_text`: Clean choice text used in next round prompts
 - `message_metadata.validation_errors`: Auto-generated validation failure records
 - `conversation_summary.status`: "succeeded", "partial", or "failed"
@@ -563,19 +540,9 @@ For detailed information on advanced features and internals, see:
 
 - **[Async Framework Architecture](docs/advanced/async-framework.md)**: Three-pool request scheduling, priority ordering, parallelism model, vLLM continuous batching integration, multi-model support
 - **[Error Handling and Recovery](docs/advanced/error-handling.md)**: Error class hierarchy, recording levels (message/transcript/job-summary), automatic recovery mechanisms, retry logic, graceful degradation
-- **[Job Recovery](docs/advanced/job-recovery.md)**: Job manifests, analyzing interrupted runs, resuming null questions, the repair.py script
-- **[Prompt Templates](docs/advanced/prompt-templates.md)**: Round-based prompt structure, key design decisions, response processing, answer matching, identity display generation, extending to other roles
-
-**Additional topics covered in advanced docs:**
-
-- Request scheduling with pending, pre-departure, and in-flight pools
-- Dependency-based parallelism within rounds
-- Error class hierarchy and utilities
-- Message-level, transcript-level, and job-summary-level error recording
-- Flexible answer matching with configurable thresholds
-- Identity reveal configuration and display generation
-- Routing mechanisms (vanilla, custom strategies)
-- Per-transcript and per-agent performance metrics
+- **[Grid Experiments](docs/advanced/grid-experiments.md)**: Parameter sweeps, grid configuration, grid manifests, resuming interrupted grid runs
+- **[Job Recovery](docs/advanced/job-recovery.md)**: Job manifests, analyzing interrupted runs, resuming null questions, the repair_job.py script
+- **[Prompt Templates](docs/advanced/prompt-templates.md)**: Round-based prompt structure, key design decisions, response processing, flexible answer matching, identity display generation, extending to other roles
 
 ---
 

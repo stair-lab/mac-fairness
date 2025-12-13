@@ -10,12 +10,12 @@ It outputs GPU requirements so you know what to allocate for resume.
 
 Usage:
     # Analyze a job manifest (find null statuses)
-    python script/repair.py analyze \\
-        experiment/bbq/my_exp/job_manifest/20251212T100000.123Z_local.json
+    python script/repair_job.py analyze \\
+        experiment/bbq/my_exp/job_manifest/20251212T100000.123Z_12345.json
 
     # Resume null questions from manifest
-    python script/repair.py resume \\
-        experiment/bbq/my_exp/job_manifest/20251212T100000.123Z_local.json
+    python script/repair_job.py resume \\
+        experiment/bbq/my_exp/job_manifest/20251212T100000.123Z_12345.json
 
 Environment Variables:
     MAC_FAIRNESS_WORKSPACE - Project root directory (required)
@@ -209,7 +209,7 @@ def print_analysis(analysis: Dict) -> None:
         info_print("All questions succeeded! Nothing to resume.", prefix=False)
     else:
         info_print(f"To resume {analysis['null_count']} null questions:", prefix=False)
-        info_print(f"  [ENV VAR SETTINGS HERE] python script/repair.py resume {analysis['path']} [--dry-run]", prefix=False)
+        info_print(f"[ENV_VARS] python script/repair_job.py resume {analysis['path']} [--dry-run]", prefix=False)
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:

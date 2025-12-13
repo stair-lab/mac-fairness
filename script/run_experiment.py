@@ -7,9 +7,6 @@ Usage:
     # Run full experiment
     uv run python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml
 
-    # Run subset of questions
-    uv run python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml --range 0-10
-
     # Run grid config (parameter sweep)
     uv run python script/run_experiment.py config/dev_vllm/my_grid_config.yaml --grid
 
@@ -36,7 +33,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Set, Tuple
+from typing import Dict, Optional, Set
 
 import yaml
 
@@ -46,38 +43,9 @@ sys.path.insert(0, str(project_root))
 
 from src.utils import debug_print, is_debug_enabled
 from src.utils.logging import info_print
-from src.utils.bookkeeping_manager import BookkeepingManager, GridManifestManager
+from src.utils.bookkeeping_manager import BookkeepingManager, GridManifestManager, set_grid_index
 from src.utils.conversation_orchestrator import ConversationOrchestrator
 from src.utils.grid_config import GridConfigExpander
-
-
-def parse_range(range_str: str) -> Tuple[int, int]:
-    """Parse range string like '0-10' into tuple (0, 10).
-
-    Args:
-        range_str: Range in format 'start-end'
-
-    Returns:
-        Tuple of (start, end) indices
-
-    Raises:
-        ValueError: If range format is invalid
-    """
-    try:
-        parts = range_str.split("-")
-        if len(parts) != 2:
-            raise ValueError("Expected exactly one '-' separator")
-        start, end = int(parts[0]), int(parts[1])
-        if start < 0:
-            raise ValueError("Start index cannot be negative")
-        if end <= start:
-            raise ValueError("End index must be greater than start index")
-        return start, end
-    except ValueError as e:
-        raise ValueError(
-            f"Invalid range format: '{range_str}'. "
-            f"Expected format: 'start-end' (e.g., '0-10'). Error: {e}"
-        ) from e
 
 
 def validate_config(config_path: Path) -> dict:
@@ -207,8 +175,8 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
     # Get expanded configs with sweep specs
     expanded_configs = expander.expand_with_sweep_specs()
 
-    if args.dry_run:
-        # Just print what would run
+    # Handle dry-run for non-resume mode
+    if args.dry_run and not args.resume:
         expander.print_expanded_configs(verbose=False)
         info_print(f"Dry run complete. {len(expanded_configs)} configurations would be executed.")
         return 0
@@ -219,11 +187,27 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
     pending_indices: Optional[list] = None
     started_run_info: Dict[int, Dict[str, str]] = {}
 
-    # Check for resume mode - load old manifest and delete it
+    # Check for resume mode
     if args.resume:
-        result = grid_manifest_manager.load_and_delete_manifest(str(config_path))
+        # Resume requires using the grid config snapshot path
+        config_parent = config_path.parent.name
+        config_grandparent = config_path.parent.parent.name if config_path.parent.parent else ""
+        is_snapshot_path = (config_grandparent == "bookkeeping" and config_parent == "grid_config_snapshot")
+        if not is_snapshot_path:
+            info_print("Error: --resume requires using the grid config snapshot path")
+            info_print("  Expected: bookkeeping/grid_config_snapshot/{config}_{timestamp}.yaml")
+            info_print(f"  Got: {config_path}")
+            info_print("\nTo find your snapshot, check: ls bookkeeping/grid_config_snapshot/")
+            return 1
+
+        # For dry-run, peek at manifest without deleting; otherwise load and delete
+        if args.dry_run:
+            result = grid_manifest_manager.peek_manifest(str(config_path))
+        else:
+            result = grid_manifest_manager.load_and_delete_manifest(str(config_path))
+
         if result is not None:
-            pending_indices, started_run_info = result
+            pending_indices, started_run_info, processed_run_info = result
             if not pending_indices:
                 info_print(f"All configurations already completed. Nothing to resume.")
                 return 0
@@ -232,15 +216,31 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             if started_count > 0:
                 info_print(f"  ({started_count} were previously started, will check job manifests for partial progress)")
         else:
-            info_print(f"No existing manifest found. Starting fresh run.")
+            info_print(f"No existing manifest found for this snapshot.")
+            info_print("Check bookkeeping/grid_manifest/ for available manifests.")
+            return 1
+
+    # Handle dry-run for resume mode
+    if args.dry_run:
+        info_print("-" * 60, prefix=False)
+        info_print("Configurations to resume:", prefix=False)
+        for i in pending_indices:
+            config, _ = expanded_configs[i]
+            exp_name = config["experiment_metadata"]["experiment_name"]
+            status = "started" if i in started_run_info else "pending"
+            info_print(f"  [{i}] {exp_name} ({status})", prefix=False)
+        info_print(f"Dry run complete. {len(pending_indices)} configurations would be resumed.")
+        return 0
 
     # Create new manifest (always - fresh or with carried-over pending status)
     if pending_indices is None:
         pending_indices = list(range(len(expanded_configs)))
+        processed_run_info = {}  # Fresh run, no processed runs to carry over
 
     submission_timestamp = datetime.now(timezone.utc)
     manifest_path = grid_manifest_manager.save_grid_manifest(
-        str(config_path), expanded_configs, submission_timestamp
+        str(config_path), expanded_configs, submission_timestamp,
+        is_resume=args.resume, processed_run_info=processed_run_info
     )
 
     # Run each configuration sequentially
@@ -265,6 +265,9 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
 
         # Mark as started in manifest
         grid_manifest_manager.mark_run_started(manifest_path, i)
+
+        # Set grid index for job_task_id generation
+        set_grid_index(i)
 
         # For "started" runs, find job manifest and get null question IDs
         # Do this before creating temp file to allow early skip
@@ -321,11 +324,6 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             # Get backend for cleanup
             backend = get_backend_type(config)
 
-            # Parse question range if specified
-            question_range = None
-            if args.range:
-                question_range = parse_range(args.range)
-
             # Run experiment
             orchestrator = ConversationOrchestrator(config_to_use)
 
@@ -334,7 +332,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
                 old_job_manifest_path.unlink()
                 info_print(f"  Deleted old job manifest: {old_job_manifest_path.name}")
 
-            asyncio.run(orchestrator.run_experiment(question_range=question_range, question_ids=question_ids))
+            asyncio.run(orchestrator.run_experiment(question_ids=question_ids))
 
             successful += 1
             grid_manifest_manager.mark_run_processed(manifest_path, i)
@@ -386,9 +384,6 @@ Examples:
   # Run full experiment
   CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 python script/run_experiment.py config/bbq_race/llama33_70b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
 
-  # Run specific range
-  python script/run_experiment.py config/bbq_race/llama33_70b_..._scratch.yaml --range 100-200
-
 Environment Variables:
   MAC_FAIRNESS_DEBUG_FLAG - Enable debug output
   MAC_FAIRNESS_EXPERIMENT_ROOT - Override experiment output directory (default: ./experiment)
@@ -397,13 +392,6 @@ Environment Variables:
 
     parser.add_argument(
         "config", type=str, help="Path to experiment configuration YAML file"
-    )
-
-    parser.add_argument(
-        "--range",
-        type=str,
-        metavar="START-END",
-        help="Process only questions in range START-END (e.g., '0-10' for first 10 questions)",
     )
 
     parser.add_argument(
@@ -429,12 +417,6 @@ Environment Variables:
     # Validate --resume requires --grid
     if args.resume and not args.grid:
         info_print("Error: --resume requires --grid flag")
-        return 1
-
-    # Validate --range cannot be used with --resume
-    if args.resume and args.range:
-        info_print("Error: --range cannot be used with --resume")
-        info_print("  Resume uses the question scope from the original run's job manifest")
         return 1
 
     # Setup signal handlers for graceful shutdown
@@ -472,11 +454,6 @@ Environment Variables:
             "benchmark_subcategory", "unknown"
         )
 
-        # Parse question range if specified
-        question_range = None
-        if args.range:
-            question_range = parse_range(args.range)
-
         # Print header
         info_print("=" * 60, prefix=False)
         info_print("Multi-Agent Conversation Framework", prefix=False)
@@ -487,8 +464,6 @@ Environment Variables:
         info_print(f"✓ Backend: {backend}", prefix=False)
         info_print(f"✓ Benchmark: {benchmark_subcategory}", prefix=False)
         info_print(f"✓ Questions: {questions_file}", prefix=False)
-        if question_range:
-            info_print(f"✓ Range: {question_range[0]}-{question_range[1]}", prefix=False)
 
         # Handle dry-run mode for regular configs
         if args.dry_run:
@@ -502,7 +477,7 @@ Environment Variables:
 
         # Run experiment (async)
         orchestrator = ConversationOrchestrator(str(config_path))
-        asyncio.run(orchestrator.run_experiment(question_range=question_range))
+        asyncio.run(orchestrator.run_experiment())
 
         info_print("=" * 60, prefix=False)
         info_print("✓ Experiment completed successfully!", prefix=False)

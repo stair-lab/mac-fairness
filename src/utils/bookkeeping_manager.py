@@ -19,46 +19,47 @@ from src.utils.logging import (
 )
 
 
-def get_array_job_id() -> str:
-    """Get unique job ID for SLURM array jobs.
-
-    For array jobs, uses SLURM_ARRAY_JOB_ID (shared across all tasks).
-    For non-array jobs, uses SLURM_JOB_ID.
-    For local runs, returns "local".
-
-    Returns:
-        Unique job identifier for the array job (not per-task)
-    """
-    # SLURM_ARRAY_JOB_ID is the parent job ID shared by all array tasks
-    array_job_id = os.environ.get("SLURM_ARRAY_JOB_ID")
-    if array_job_id:
-        return array_job_id
-
-    # Non-array SLURM job
-    slurm_job = os.environ.get("SLURM_JOB_ID")
-    if slurm_job:
-        return slurm_job
-
-    return "local"
-
-
-def get_job_task_id() -> str:
+def get_job_task_id(grid_index: Optional[int] = None) -> str:
     """Get job-task identifier for per-task tracking.
 
-    For array jobs: "{SLURM_JOB_ID}_{SLURM_ARRAY_TASK_ID}"
-    For non-array jobs: "{SLURM_JOB_ID}"
-    For local runs: "local"
+    Uses the process ID as the base identifier. For grid runs,
+    appends the grid index.
+
+    Args:
+        grid_index: Optional 0-indexed grid configuration index
 
     Returns:
-        Job-task identifier string
+        Job-task identifier string: "{pid}" or "{pid}_{grid_index}"
     """
-    slurm_job = os.environ.get("SLURM_JOB_ID")
-    slurm_task = os.environ.get("SLURM_ARRAY_TASK_ID")
-    if slurm_job and slurm_task:
-        return f"{slurm_job}_{slurm_task}"
-    elif slurm_job:
-        return slurm_job
-    return "local"
+    pid = os.getpid()
+    if grid_index is not None:
+        return f"{pid}_{grid_index}"
+    return str(pid)
+
+
+# Module-level grid index for the current run (set by run_experiment.py for grid runs)
+_current_grid_index: Optional[int] = None
+
+
+def set_grid_index(index: Optional[int]) -> None:
+    """Set the current grid index for this process.
+
+    Called by run_experiment.py at the start of each grid configuration run.
+
+    Args:
+        index: 0-indexed grid configuration index, or None for non-grid runs
+    """
+    global _current_grid_index
+    _current_grid_index = index
+
+
+def get_current_job_task_id() -> str:
+    """Get job-task identifier using the module-level grid index.
+
+    Returns:
+        Job-task identifier string: "{pid}" or "{pid}_{grid_index}"
+    """
+    return get_job_task_id(_current_grid_index)
 
 
 class BookkeepingManager:
@@ -137,7 +138,6 @@ class BookkeepingManager:
         questions_failed: int,
         start_time: datetime,
         end_time: datetime,
-        question_range: Optional[tuple] = None,
         error_summary: Optional[List[Dict[str, Any]]] = None,
         per_transcript_stats: Optional[List[Dict[str, Any]]] = None,
         config_snapshot_path: Optional[str] = None,
@@ -153,7 +153,6 @@ class BookkeepingManager:
             questions_failed: Number of failed conversations
             start_time: When the job started
             end_time: When the job ended
-            question_range: Optional question range processed
             error_summary: Optional list of error information
             per_transcript_stats: Optional list of per-transcript statistics
             effective_backend_config: Optional dict of effective backend config per model
@@ -177,15 +176,8 @@ class BookkeepingManager:
         benchmark = exp_meta["benchmark_subcategory"]
         experiment = exp_meta["experiment_name"]
 
-        # Build job ID: "local", "10000", or "10001_2"
-        slurm_job = os.environ.get("SLURM_JOB_ID")
-        slurm_task = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if slurm_job and slurm_task:
-            job_task_id = f"{slurm_job}_{slurm_task}"
-        elif slurm_job:
-            job_task_id = slurm_job
-        else:
-            job_task_id = "local"
+        # Build job ID: "{pid}" or "{pid}_{grid_index}"
+        job_task_id = get_current_job_task_id()
 
         # Filename: {timestamp}_{job_task_id}.json
         timestamp_str = format_filename_timestamp(start_time)
@@ -615,7 +607,7 @@ class BookkeepingManager:
         """Save a job manifest recording all planned questions for recovery.
 
         The manifest uses the same timestamp as the config_snapshot.
-        One manifest per job run (SLURM or local).
+        One manifest per job run.
 
         Each question has a status field:
         - "succeeded": completed successfully
@@ -642,12 +634,12 @@ class BookkeepingManager:
         manifest_dir.mkdir(parents=True, exist_ok=True)
 
         # Same naming format as job_summary: {timestamp}_{job_task_id}.json
-        job_task_id = get_job_task_id()
+        job_task_id = get_current_job_task_id()
         manifest_path = manifest_dir / f"{timestamp_str}_{job_task_id}.json"
 
         # Build manifest content with per-question status (all start as null)
         manifest = {
-            "job_task_id": get_job_task_id(),
+            "job_task_id": job_task_id,
             "experiment_name": experiment,
             "benchmark_subcategory": benchmark,
             "submission_timestamp": format_timestamp(submission_timestamp),
@@ -709,6 +701,100 @@ class BookkeepingManager:
                 json.dump(manifest, f, indent=2)
         except (json.JSONDecodeError, OSError) as e:
             info_print(f"Warning: Could not update manifest: {e}")
+
+    def record_question_completion(
+        self,
+        manifest_path: Path,
+        question_id: str,
+        succeeded: bool,
+        index_path: Path,
+        index_entry: Dict[str, Any],
+    ) -> None:
+        """Atomically record question completion in both manifest and index.
+
+        This method ensures that either BOTH the manifest update AND index append
+        succeed together, or neither does. This prevents inconsistencies between
+        the two sources of truth when interrupted (e.g., by Ctrl+C).
+
+        The operation order within the lock is:
+        1. Update job manifest (mark question as succeeded/failed)
+        2. Append to index.jsonl
+
+        Raises:
+            ManifestParseError: If manifest cannot be parsed
+            ManifestWriteError: If manifest or index cannot be written
+
+        Args:
+            manifest_path: Absolute path to the job manifest file
+            question_id: The question_id to mark
+            succeeded: True if the question succeeded, False otherwise
+            index_path: Absolute path to the index.jsonl file
+            index_entry: The index entry dictionary to append
+        """
+        # Use a dedicated lock file for atomic completion
+        # This ensures manifest update and index append are atomic together
+        lock_path = self.project_root / "bookkeeping" / ".completion.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create lock file if it doesn't exist
+        if not lock_path.exists():
+            lock_path.touch()
+
+        # Create index file if it doesn't exist
+        if not index_path.exists():
+            index_path.touch()
+
+        # Acquire exclusive lock (blocking - waits for other processes)
+        with open(lock_path, "r") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                # Step 1: Update manifest using atomic write (write to temp, then rename)
+                if manifest_path.exists():
+                    try:
+                        with open(manifest_path, "r") as f:
+                            manifest = json.load(f)
+                    except json.JSONDecodeError as e:
+                        raise ManifestParseError(
+                            f"Failed to parse manifest {manifest_path}: {e}"
+                        ) from e
+
+                    # Find and update the question status
+                    for q in manifest.get("questions", []):
+                        if q.get("question_id") == question_id:
+                            q["status"] = "succeeded" if succeeded else None
+                            break
+
+                    # Increment processed count
+                    manifest["num_questions_processed"] = (
+                        manifest.get("num_questions_processed", 0) + 1
+                    )
+
+                    # Atomic write: write to temp file, then rename
+                    # This ensures manifest is never left in a corrupted state on Ctrl+C
+                    temp_path = manifest_path.with_suffix(".json.tmp")
+                    try:
+                        with open(temp_path, "w") as f:
+                            json.dump(manifest, f, indent=2)
+                        temp_path.rename(manifest_path)
+                    except OSError as e:
+                        # Clean up temp file if rename failed
+                        if temp_path.exists():
+                            temp_path.unlink(missing_ok=True)
+                        raise ManifestWriteError(
+                            f"Failed to write manifest {manifest_path}: {e}"
+                        ) from e
+
+                # Step 2: Append to index
+                try:
+                    with open(index_path, "a") as f:
+                        f.write(json.dumps(index_entry) + "\n")
+                except OSError as e:
+                    raise ManifestWriteError(
+                        f"Failed to append to index {index_path}: {e}"
+                    ) from e
+
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def check_manifest_complete(self, manifest_path: Path) -> bool:
         """Check if all questions in manifest are succeeded.
@@ -862,7 +948,7 @@ class StreamingJobSummary:
         experiment = exp_meta["experiment_name"]
 
         timestamp_str = format_filename_timestamp(self.start_time)
-        job_task_id = get_job_task_id()
+        job_task_id = get_current_job_task_id()
         filename_id = f"{timestamp_str}_{job_task_id}"
 
         self._summary_path = (
@@ -882,7 +968,7 @@ class StreamingJobSummary:
         if self._summary_path is None:
             return
 
-        job_task_id = get_job_task_id()
+        job_task_id = get_current_job_task_id()
         exp_meta = self.config["experiment_metadata"]
 
         # Calculate duration so far
@@ -983,7 +1069,6 @@ class StreamingJobSummary:
             questions_failed=self.questions_failed,
             start_time=self.start_time,
             end_time=end_time,
-            question_range=None,  # Already applied
             error_summary=self.error_summary if self.error_summary else None,
             per_transcript_stats=self.per_transcript_stats if self.per_transcript_stats else None,
             config_snapshot_path=self.config_snapshot_path,
@@ -1025,18 +1110,53 @@ class GridManifestManager:
         """Get directory for grid manifests."""
         return self.project_root / "bookkeeping" / "grid_manifest"
 
+    def _save_grid_config_snapshot(
+        self,
+        grid_config_path: str,
+        submission_timestamp: datetime,
+    ) -> str:
+        """Save a snapshot of the grid config file.
+
+        Args:
+            grid_config_path: Path to the original grid config file
+            submission_timestamp: When the grid run started
+
+        Returns:
+            Path to the saved snapshot (with $MAC_FAIRNESS_WORKSPACE prefix)
+        """
+        snapshot_dir = self.project_root / "bookkeeping" / "grid_config_snapshot"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use same naming convention as config_snapshot: {config_name}_{timestamp}.yaml
+        timestamp_str = format_filename_timestamp(submission_timestamp)
+        original_name = Path(grid_config_path).stem
+        snapshot_filename = f"{original_name}_{timestamp_str}.yaml"
+        snapshot_path = snapshot_dir / snapshot_filename
+
+        # Copy the grid config file
+        import shutil
+        shutil.copy2(grid_config_path, snapshot_path)
+
+        # Return path with $MAC_FAIRNESS_WORKSPACE prefix for portability
+        return f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/grid_config_snapshot/{snapshot_filename}"
+
     def save_grid_manifest(
         self,
         grid_config_path: str,
         expanded_configs: list,
         submission_timestamp: datetime,
+        is_resume: bool = False,
+        processed_run_info: Optional[Dict[int, Dict[str, Any]]] = None,
     ) -> Path:
         """Save a grid manifest at the start of a grid run.
 
         Args:
-            grid_config_path: Path to the original grid config file
+            grid_config_path: Path to the grid config file (or snapshot on resume)
             expanded_configs: List of (config, grid_sweep_specs) tuples from GridConfigExpander
             submission_timestamp: When the grid run started
+            is_resume: If True, grid_config_path is already a snapshot; reuse it
+            processed_run_info: Dict mapping run_id to the full run entry dict for runs
+                that were already processed (for resume). The run entries are used directly.
 
         Returns:
             Path to the saved manifest file
@@ -1045,29 +1165,48 @@ class GridManifestManager:
         manifest_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp_str = format_filename_timestamp(submission_timestamp)
-        job_task_id = get_job_task_id()
-        manifest_path = manifest_dir / f"{timestamp_str}_{job_task_id}.json"
+        pid = os.getpid()
+        manifest_path = manifest_dir / f"{timestamp_str}_{pid}.json"
+
+        # Save or reuse grid config snapshot
+        if is_resume:
+            # On resume, grid_config_path is already the snapshot path
+            snapshot_filename = Path(grid_config_path).name
+            grid_config_snapshot_path = f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/grid_config_snapshot/{snapshot_filename}"
+        else:
+            grid_config_snapshot_path = self._save_grid_config_snapshot(
+                grid_config_path, submission_timestamp
+            )
+
+        if processed_run_info is None:
+            processed_run_info = {}
 
         # Build experiment run entries
         experiment_runs = []
         for i, (config, grid_sweep_specs) in enumerate(expanded_configs):
-            exp_meta = config.get("experiment_metadata", {})
-            experiment_runs.append({
-                "run_id": i,
-                "experiment_name": exp_meta.get("experiment_name", "unknown"),
-                "benchmark_subcategory": exp_meta.get("benchmark_subcategory", "unknown"),
-                "grid_sweep_specs": grid_sweep_specs,
-                "status": None,  # null = not started
-                "started_at": None,
-                "completed_at": None,
-            })
+            if i in processed_run_info:
+                # Reuse the full run entry from the old manifest (preserves all info)
+                experiment_runs.append(processed_run_info[i])
+            else:
+                # New run entry
+                exp_meta = config.get("experiment_metadata", {})
+                experiment_runs.append({
+                    "run_id": i,
+                    "experiment_name": exp_meta.get("experiment_name", "unknown"),
+                    "benchmark_subcategory": exp_meta.get("benchmark_subcategory", "unknown"),
+                    "grid_sweep_specs": grid_sweep_specs,
+                    "status": None,
+                    "started_at": None,
+                    "completed_at": None,
+                })
 
         manifest = {
             "grid_config_path": str(grid_config_path),
-            "job_task_id": job_task_id,
+            "grid_config_snapshot_path": grid_config_snapshot_path,
+            "pid": pid,
             "submission_timestamp": format_timestamp(submission_timestamp),
             "num_runs_planned": len(experiment_runs),
-            "num_runs_processed": 0,
+            "num_runs_processed": len(processed_run_info),
             "experiment_runs": experiment_runs,
             "created_at": format_timestamp(datetime.now(timezone.utc)),
         }
@@ -1110,10 +1249,17 @@ class GridManifestManager:
                 datetime.now(timezone.utc)
             )
 
+        # Atomic write: write to temp file, then rename
+        # This ensures manifest is never left in a corrupted state on Ctrl+C
+        temp_path = manifest_path.with_suffix(".json.tmp")
         try:
-            with open(manifest_path, "w") as f:
+            with open(temp_path, "w") as f:
                 json.dump(manifest, f, indent=2)
+            temp_path.rename(manifest_path)
         except OSError as e:
+            # Clean up temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
             info_print(f"Warning: Could not write grid manifest: {e}")
 
     def mark_run_processed(self, manifest_path: Path, run_id: int) -> None:
@@ -1151,10 +1297,17 @@ class GridManifestManager:
         # Update processed count
         manifest["num_runs_processed"] = manifest.get("num_runs_processed", 0) + 1
 
+        # Atomic write: write to temp file, then rename
+        # This ensures manifest is never left in a corrupted state on Ctrl+C
+        temp_path = manifest_path.with_suffix(".json.tmp")
         try:
-            with open(manifest_path, "w") as f:
+            with open(temp_path, "w") as f:
                 json.dump(manifest, f, indent=2)
+            temp_path.rename(manifest_path)
         except OSError as e:
+            # Clean up temp file if it exists
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
             info_print(f"Warning: Could not write grid manifest: {e}")
 
     def get_pending_indices(self, manifest_path: Path) -> list:
@@ -1213,7 +1366,7 @@ class GridManifestManager:
         return all(c.get("status") == "processed" for c in configs)
 
     def delete_if_complete(self, manifest_path: Path) -> bool:
-        """Delete manifest if all configurations have been processed.
+        """Delete manifest and grid config snapshot if all configurations have been processed.
 
         Args:
             manifest_path: Path to the manifest file
@@ -1222,46 +1375,76 @@ class GridManifestManager:
             True if manifest was deleted
         """
         if self.is_complete(manifest_path):
+            # Read manifest to get grid config snapshot path before deleting
+            grid_config_snapshot_path = None
+            try:
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+                    grid_config_snapshot_path = manifest.get("grid_config_snapshot_path")
+            except (json.JSONDecodeError, OSError):
+                pass
+
             try:
                 manifest_path.unlink(missing_ok=True)
                 info_print(
                     f"Grid manifest deleted (all succeeded): "
                     f"{display_path(manifest_path, self.project_root)}"
                 )
+
+                # Also delete the grid config snapshot
+                if grid_config_snapshot_path:
+                    # Resolve $MAC_FAIRNESS_WORKSPACE if present
+                    resolved_path = grid_config_snapshot_path
+                    if resolved_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
+                        resolved_path = resolved_path.replace(
+                            "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
+                        )
+                    snapshot_path = Path(resolved_path)
+                    if snapshot_path.exists():
+                        snapshot_path.unlink(missing_ok=True)
+                        info_print(
+                            f"Grid config snapshot deleted: "
+                            f"{display_path(snapshot_path, self.project_root)}"
+                        )
+
                 return True
             except OSError as e:
                 info_print(f"Warning: Could not delete grid manifest: {e}")
         return False
 
-    def load_and_delete_manifest(
+    def _find_manifest(
         self, grid_config_path: str
-    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]]]]:
-        """Load pending configurations from existing manifest and delete it.
-
-        Finds the most recent manifest for this grid config, extracts pending
-        configuration indices (those without status="processed"), deletes the
-        manifest, and returns the pending indices along with info for "started"
-        runs (needed to find their job manifests for resume).
+    ) -> Optional[Tuple[Path, dict]]:
+        """Find the most recent manifest for a grid config.
 
         Args:
-            grid_config_path: Path to the grid config file
+            grid_config_path: Path to the grid config file (or snapshot)
 
         Returns:
-            Tuple of (pending_indices, started_run_info) or None if no manifest found.
-            started_run_info maps run_id to {"experiment_name", "benchmark_subcategory"}
-            for runs with status="started" (interrupted runs that may have partial progress).
+            Tuple of (manifest_path, manifest_dict) or None if not found.
         """
         manifest_dir = self._get_manifest_dir()
         if not manifest_dir.exists():
             return None
 
-        # Find all manifests that match this grid config
+        # Find all manifests that match this grid config (by snapshot path)
         matching_manifests = []
+        # Resolve input path to absolute for comparison
+        config_path_resolved = str(Path(grid_config_path).resolve())
         for manifest_file in manifest_dir.glob("*.json"):
             try:
                 with open(manifest_file, "r") as f:
                     manifest = json.load(f)
-                if manifest.get("grid_config_path") == str(grid_config_path):
+                # Match by snapshot path (resume requires using snapshot path)
+                snapshot_path = manifest.get("grid_config_snapshot_path", "")
+                # Resolve $MAC_FAIRNESS_WORKSPACE for comparison
+                if snapshot_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
+                    resolved_snapshot = snapshot_path.replace(
+                        "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
+                    )
+                else:
+                    resolved_snapshot = snapshot_path
+                if config_path_resolved == resolved_snapshot:
                     matching_manifests.append((manifest_file, manifest))
             except json.JSONDecodeError as e:
                 info_print(f"Warning: Could not parse manifest {manifest_file.name}: {e}")
@@ -1274,17 +1457,33 @@ class GridManifestManager:
             return None
 
         # Get most recently modified
-        latest_path, latest_manifest = max(
-            matching_manifests, key=lambda x: x[0].stat().st_mtime
-        )
+        return max(matching_manifests, key=lambda x: x[0].stat().st_mtime)
 
-        # Extract pending run IDs and info for "started" runs
+    def _extract_pending_from_manifest(
+        self, manifest: dict
+    ) -> Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]:
+        """Extract pending run IDs, started run info, and processed run info from a manifest.
+
+        Args:
+            manifest: The manifest dictionary
+
+        Returns:
+            Tuple of (pending_indices, started_run_info, processed_run_info).
+            started_run_info maps run_id to {"experiment_name", "benchmark_subcategory"}
+            for runs with status="started" (interrupted runs that may have partial progress).
+            processed_run_info maps run_id to the full run entry dict
+            for runs with status="processed" (to preserve all info on resume).
+        """
         pending: List[int] = []
         started_run_info: Dict[int, Dict[str, str]] = {}
-        for run in latest_manifest.get("experiment_runs", []):
+        processed_run_info: Dict[int, Dict[str, Any]] = {}
+        for run in manifest.get("experiment_runs", []):
             status = run.get("status")
-            if status != "processed":
-                run_id = run["run_id"]
+            run_id = run["run_id"]
+            if status == "processed":
+                # Preserve the full run entry for processed runs
+                processed_run_info[run_id] = run
+            else:
                 pending.append(run_id)
                 # For "started" runs, save info needed to find job manifest
                 if status == "started":
@@ -1292,12 +1491,61 @@ class GridManifestManager:
                         "experiment_name": run.get("experiment_name", ""),
                         "benchmark_subcategory": run.get("benchmark_subcategory", ""),
                     }
+        return pending, started_run_info, processed_run_info
+
+    def peek_manifest(
+        self, grid_config_path: str
+    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]]:
+        """Peek at pending configurations from existing manifest without deleting.
+
+        Same as load_and_delete_manifest but does not delete the manifest.
+        Used for dry-run mode.
+
+        Args:
+            grid_config_path: Path to the grid config file
+
+        Returns:
+            Tuple of (pending_indices, started_run_info, processed_run_info) or None if no manifest found.
+        """
+        result = self._find_manifest(grid_config_path)
+        if result is None:
+            return None
+        _, manifest = result
+        return self._extract_pending_from_manifest(manifest)
+
+    def load_and_delete_manifest(
+        self, grid_config_path: str
+    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]]:
+        """Load pending configurations from existing manifest and delete it.
+
+        Finds the most recent manifest for this grid config, extracts pending
+        configuration indices (those without status="processed"), deletes the
+        manifest, and returns the pending indices along with info for "started"
+        runs (needed to find their job manifests for resume) and processed runs
+        (to preserve timestamps).
+
+        Args:
+            grid_config_path: Path to the grid config file
+
+        Returns:
+            Tuple of (pending_indices, started_run_info, processed_run_info) or None if no manifest found.
+            started_run_info maps run_id to {"experiment_name", "benchmark_subcategory"}
+            for runs with status="started" (interrupted runs that may have partial progress).
+            processed_run_info maps run_id to the full run entry dict
+            for runs with status="processed" (to preserve all info on resume).
+        """
+        result = self._find_manifest(grid_config_path)
+        if result is None:
+            return None
+
+        manifest_path, manifest = result
+        pending, started_run_info, processed_run_info = self._extract_pending_from_manifest(manifest)
 
         # Delete the old manifest
         try:
-            latest_path.unlink()
-            info_print(f"Old manifest deleted: {latest_path.name}")
+            manifest_path.unlink()
+            info_print(f"Old manifest deleted: {manifest_path.name}")
         except OSError as e:
             info_print(f"Warning: Could not delete old manifest: {e}")
 
-        return pending, started_run_info
+        return pending, started_run_info, processed_run_info
