@@ -1201,7 +1201,6 @@ class GridManifestManager:
                 })
 
         manifest = {
-            "grid_config_path": str(grid_config_path),
             "grid_config_snapshot_path": grid_config_snapshot_path,
             "pid": pid,
             "submission_timestamp": format_timestamp(submission_timestamp),

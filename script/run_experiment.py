@@ -8,13 +8,13 @@ Usage:
     uv run python script/run_experiment.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml
 
     # Run grid config (parameter sweep)
-    uv run python script/run_experiment.py config/dev_vllm/my_grid_config.yaml --grid
+    uv run python script/run_experiment.py config/my_exp/my_grid_config.yaml --grid
 
     # Dry run (validate config and show what would run without executing)
-    uv run python script/run_experiment.py config/dev_vllm/my_config.yaml --dry-run
+    uv run python script/run_experiment.py config/my_exp/my_config.yaml --dry-run
 
     # Dry run grid config (show all expanded configurations)
-    uv run python script/run_experiment.py config/dev_vllm/my_grid_config.yaml --grid --dry-run
+    uv run python script/run_experiment.py config/my_exp/my_grid_config.yaml --grid --dry-run
 
     # Add env var setting
     CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 uv run python ...

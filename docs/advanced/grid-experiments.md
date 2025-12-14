@@ -135,7 +135,6 @@ bookkeeping/grid_config_snapshot/{config_name}_{timestamp}.yaml
 
 ```json
 {
-  "grid_config_path": "config/dev_vllm/my_grid_config.yaml",
   "grid_config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/grid_config_snapshot/...",
   "pid": 12345,
   "submission_timestamp": "2025-12-13T10:00:00.000Z",
