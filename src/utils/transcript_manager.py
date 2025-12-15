@@ -293,6 +293,7 @@ class TranscriptManager:
         conversation_config = config["conversation_config"]
         identity_config = config["identity_reveal_config"]
         prompt_template_config = config.get("prompt_template_config", {})
+        model_defs = config["model_definitions"]
         agent_defs = config["agent_definitions"]
         summary = transcript["conversation_summary"]
 
@@ -335,6 +336,7 @@ class TranscriptManager:
             "routing_strategy": conversation_config["routing_strategy"],
             "identity_reveal_config": identity_config,
             "prompt_template_config": prompt_template_config,
+            "model_definitions": model_defs,
             "n_agents": len(agent_defs),
             "agent_definitions": agent_defs,
             "status": summary["status"],

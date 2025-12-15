@@ -37,14 +37,14 @@ def get_job_task_id(grid_index: Optional[int] = None) -> str:
     return str(pid)
 
 
-# Module-level grid index for the current run (set by run_experiment.py for grid runs)
+# Module-level grid index for the current task (set by run_job.py for grid jobs)
 _current_grid_index: Optional[int] = None
 
 
 def set_grid_index(index: Optional[int]) -> None:
     """Set the current grid index for this process.
 
-    Called by run_experiment.py at the start of each grid configuration run.
+    Called by run_job.py at the start of each grid task.
 
     Args:
         index: 0-indexed grid configuration index, or None for non-grid runs
@@ -114,8 +114,8 @@ class BookkeepingManager:
         transcript_dir = experiment_dir / "transcript"
         transcript_dir.mkdir(parents=True, exist_ok=True)
 
-        job_summary_dir = experiment_dir / "job_summary"
-        job_summary_dir.mkdir(parents=True, exist_ok=True)
+        task_summary_dir = experiment_dir / "task_summary"
+        task_summary_dir.mkdir(parents=True, exist_ok=True)
 
         info_print(
             f"Directories ensured for: {display_path(experiment_dir, self.project_root)}"
@@ -126,10 +126,10 @@ class BookkeepingManager:
             "config_snapshot": config_snapshot_dir,
             "experiment": experiment_dir,
             "transcript": transcript_dir,
-            "job_summary": job_summary_dir,
+            "task_summary": task_summary_dir,
         }
 
-    def save_job_summary(
+    def save_task_summary(
         self,
         config: Dict[str, Any],
         questions_total: int,
@@ -202,7 +202,7 @@ class BookkeepingManager:
         error_summary_structured = self._build_error_summary(error_summary or [])
 
         # Build comprehensive job summary matching README specification
-        job_summary = {
+        task_summary = {
             "job_task_id": job_task_id,
             "experiment_name": experiment,
             "benchmark_subcategory": benchmark,
@@ -216,7 +216,8 @@ class BookkeepingManager:
             ),
             # Processing statistics
             "processing_statistics": {
-                "questions_attempted": questions_total,
+                "questions_total": questions_total,
+                "questions_attempted": questions_succeeded + questions_partial + questions_failed,
                 "questions_succeeded": questions_succeeded,
                 "questions_partial": questions_partial,
                 "questions_failed": questions_failed,
@@ -235,23 +236,23 @@ class BookkeepingManager:
 
         # Add verbose config sections only in debug mode (lighter in production)
         if is_debug_enabled():
-            job_summary["conversation_config"] = {
+            task_summary["conversation_config"] = {
                 "routing_strategy": conversation_config["routing_strategy"],
                 "max_rounds": conversation_config["max_rounds"],
                 "agent_count": len(agent_defs),
             }
-            job_summary["retry_config"] = {
+            task_summary["retry_config"] = {
                 "max_retries": retry_config["max_retries"],
                 "answer_match_threshold": retry_config["answer_match_threshold"],
                 "retry_on_validation_error": retry_config["retry_on_validation_error"],
                 "retry_on_generation_error": retry_config["retry_on_generation_error"],
             }
-            job_summary["identity_reveal_config"] = identity_reveal_config
-            job_summary["prompt_template_config"] = prompt_template_config
-            job_summary["model_definitions"] = self._build_backend_config(
+            task_summary["identity_reveal_config"] = identity_reveal_config
+            task_summary["prompt_template_config"] = prompt_template_config
+            task_summary["model_definitions"] = self._build_backend_config(
                 model_definitions, effective_backend_config
             )
-            job_summary["processing_statistics"]["transcript_uuids"] = [
+            task_summary["processing_statistics"]["transcript_uuids"] = [
                 stat["transcript_id"] for stat in (per_transcript_stats or [])
             ]
 
@@ -260,7 +261,7 @@ class BookkeepingManager:
             exp_root_path
             / benchmark
             / experiment
-            / "job_summary"
+            / "task_summary"
             / f"{filename_id}.json"
         )
 
@@ -268,7 +269,7 @@ class BookkeepingManager:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(summary_path, "w") as f:
-            json.dump(job_summary, f, indent=2)
+            json.dump(task_summary, f, indent=2)
 
         info_print(
             f"Job summary saved: {display_path(summary_path, self.project_root)}"
@@ -597,17 +598,18 @@ class BookkeepingManager:
             exp_root_path = self.project_root / exp_root
         return exp_root_path
 
-    def save_job_manifest(
+    def save_task_manifest(
         self,
         config: Dict[str, Any],
         questions: List[Dict[str, Any]],
         submission_timestamp: datetime,
         config_snapshot_path: str,
+        succeeded_questions: Optional[List[Dict[str, Any]]] = None,
     ) -> Path:
-        """Save a job manifest recording all planned questions for recovery.
+        """Save a task manifest recording all planned questions for recovery.
 
         The manifest uses the same timestamp as the config_snapshot.
-        One manifest per job run.
+        One manifest per task run.
 
         Each question has a status field:
         - "succeeded": completed successfully
@@ -618,6 +620,9 @@ class BookkeepingManager:
             questions: List of questions to process (already sliced by range)
             submission_timestamp: Same timestamp used for config_snapshot
             config_snapshot_path: Path to the config snapshot (for reference)
+            succeeded_questions: Optional list of question entries that already succeeded
+                (carried over from previous manifest on resume). These preserve their
+                original index and "succeeded" status.
 
         Returns:
             Absolute path to the saved manifest file
@@ -630,14 +635,45 @@ class BookkeepingManager:
         # Use same timestamp format as config_snapshot (millisecond precision)
         timestamp_str = format_filename_timestamp(submission_timestamp)
 
-        manifest_dir = exp_root_path / benchmark / experiment / "job_manifest"
+        manifest_dir = exp_root_path / benchmark / experiment / "task_manifest"
         manifest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Same naming format as job_summary: {timestamp}_{job_task_id}.json
+        # Same naming format as task_summary: {timestamp}_{job_task_id}.json
         job_task_id = get_current_job_task_id()
         manifest_path = manifest_dir / f"{timestamp_str}_{job_task_id}.json"
 
-        # Build manifest content with per-question status (all start as null)
+        # Build question entries: combine succeeded (carry-over) with new (null status)
+        if succeeded_questions:
+            # Create a map of question_id to succeeded entry
+            succeeded_by_id = {q["question_id"]: q for q in succeeded_questions}
+            # Build combined list preserving succeeded status
+            question_entries = []
+            for i, q in enumerate(questions):
+                qid = q.get("question_id", f"q_{i}")
+                if qid in succeeded_by_id:
+                    # Carry over succeeded entry (preserve all fields)
+                    question_entries.append(succeeded_by_id[qid])
+                else:
+                    # New question with null status
+                    question_entries.append({
+                        "index": i,
+                        "question_id": qid,
+                        "status": None,
+                    })
+            num_succeeded = len(succeeded_questions)
+        else:
+            # All new questions start with null status
+            question_entries = [
+                {
+                    "index": i,
+                    "question_id": q.get("question_id", f"q_{i}"),
+                    "status": None,
+                }
+                for i, q in enumerate(questions)
+            ]
+            num_succeeded = 0
+
+        # Build manifest content
         manifest = {
             "job_task_id": job_task_id,
             "experiment_name": experiment,
@@ -645,24 +681,23 @@ class BookkeepingManager:
             "submission_timestamp": format_timestamp(submission_timestamp),
             "config_snapshot_path": config_snapshot_path,
             "num_questions_planned": len(questions),
-            "num_questions_processed": 0,
-            "questions": [
-                {
-                    "index": i,
-                    "question_id": q.get("question_id", f"q_{i}"),
-                    "status": None,  # null = not yet succeeded
-                }
-                for i, q in enumerate(questions)
-            ],
+            "num_questions_processed": num_succeeded,  # Start with carried-over succeeded count
+            "questions": question_entries,
             "created_at": format_timestamp(datetime.now(timezone.utc)),
         }
 
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
 
-        info_print(
-            f"Job manifest saved: {display_path(manifest_path, self.project_root)}"
-        )
+        if num_succeeded > 0:
+            info_print(
+                f"Task manifest saved: {display_path(manifest_path, self.project_root)} "
+                f"({num_succeeded} succeeded carried over)"
+            )
+        else:
+            info_print(
+                f"Task manifest saved: {display_path(manifest_path, self.project_root)}"
+            )
 
         return manifest_path
 
@@ -830,19 +865,20 @@ class BookkeepingManager:
             try:
                 manifest_path.unlink(missing_ok=True)
                 info_print(
-                    f"Job manifest deleted (all succeeded): {display_path(manifest_path, self.project_root)}"
+                    f"Task manifest deleted (all succeeded): {display_path(manifest_path, self.project_root)}"
                 )
                 return True
             except OSError:
                 pass
         return False
 
-    def find_job_manifest_and_get_null_questions(
+    def find_task_manifest_and_get_null_questions(
         self,
         experiment_name: str,
         benchmark_subcategory: str,
-    ) -> Optional[Tuple[Path, List[str], str]]:
-        """Find the most recent job manifest for an experiment and get null question IDs.
+        expected_config: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Tuple[Path, List[str], str, List[Dict[str, Any]]]]:
+        """Find a task manifest for an experiment and get null question IDs.
 
         Used for resuming interrupted runs: finds questions that didn't succeed
         so they can be re-run while skipping succeeded ones.
@@ -850,14 +886,22 @@ class BookkeepingManager:
         Args:
             experiment_name: Name of the experiment
             benchmark_subcategory: Benchmark category
+            expected_config: Optional expected configuration to validate against.
+                When provided, validates each candidate manifest's config_snapshot
+                against this expected config to ensure we resume with the correct
+                configuration (important for grid runs where multiple configurations
+                may share the same experiment_name but have different parameters).
 
         Returns:
-            Tuple of (manifest_path, null_question_ids, config_snapshot_path) or None if no manifest found.
+            Tuple of (manifest_path, null_question_ids, config_snapshot_path, succeeded_questions)
+            or None if no manifest found.
             null_question_ids are questions with status != "succeeded".
             config_snapshot_path is the path to the config snapshot used for this job.
+            succeeded_questions is a list of question entries that already succeeded
+            (to be carried over when creating a new manifest for resume).
         """
         exp_root_path = self.get_experiment_root()
-        manifest_dir = exp_root_path / benchmark_subcategory / experiment_name / "job_manifest"
+        manifest_dir = exp_root_path / benchmark_subcategory / experiment_name / "task_manifest"
 
         if not manifest_dir.exists():
             return None
@@ -867,29 +911,81 @@ class BookkeepingManager:
         if not manifests:
             return None
 
-        # Get most recently modified
-        latest_manifest = max(manifests, key=lambda p: p.stat().st_mtime)
+        # Sort by modification time (most recent first) for deterministic fallback
+        manifests = sorted(manifests, key=lambda p: p.stat().st_mtime, reverse=True)
+
+        # Try each manifest, validating config_snapshot if expected_config is provided
+        for manifest_path in manifests:
+            try:
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            config_snapshot_path = manifest.get("config_snapshot_path", "")
+
+            # Validate config_snapshot matches expected_config if provided
+            if expected_config is not None and config_snapshot_path:
+                if not self._validate_config_snapshot_match(
+                    config_snapshot_path, expected_config
+                ):
+                    continue  # Try next manifest
+
+            # Found a valid manifest - extract null question IDs and succeeded questions
+            null_question_ids = []
+            succeeded_questions = []
+            for q in manifest.get("questions", []):
+                if q.get("status") == "succeeded":
+                    # Preserve succeeded question entries for carry-over
+                    succeeded_questions.append(q)
+                else:
+                    qid = q.get("question_id", f"q_{q.get('index', '?')}")
+                    null_question_ids.append(qid)
+
+            return manifest_path, null_question_ids, config_snapshot_path, succeeded_questions
+
+        # No matching manifest found
+        return None
+
+    def _validate_config_snapshot_match(
+        self,
+        config_snapshot_path: str,
+        expected_config: Dict[str, Any],
+    ) -> bool:
+        """Validate that a config snapshot exactly matches the expected configuration.
+
+        Performs exact comparison of the entire configuration to ensure the snapshot
+        is for the exact same experiment configuration (important for grid runs where
+        multiple configurations may share the same experiment_name).
+
+        Args:
+            config_snapshot_path: Path to the config snapshot file
+            expected_config: Expected configuration to compare against
+
+        Returns:
+            True if configurations match exactly, False otherwise
+        """
+        import yaml
+
+        # Resolve $MAC_FAIRNESS_WORKSPACE if present
+        resolved_path = config_snapshot_path
+        if resolved_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
+            resolved_path = resolved_path.replace(
+                "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
+            )
+
+        snapshot_path = Path(resolved_path)
+        if not snapshot_path.exists():
+            return False
 
         try:
-            with open(latest_manifest, "r") as f:
-                manifest = json.load(f)
-        except json.JSONDecodeError as e:
-            info_print(f"Warning: Could not parse job manifest {latest_manifest.name}: {e}")
-            return None
-        except OSError as e:
-            info_print(f"Warning: Could not read job manifest {latest_manifest.name}: {e}")
-            return None
+            with open(snapshot_path, "r") as f:
+                snapshot_config = yaml.safe_load(f)
+        except (yaml.YAMLError, OSError):
+            return False
 
-        # Extract null question IDs (not succeeded)
-        null_question_ids = []
-        for q in manifest.get("questions", []):
-            if q.get("status") != "succeeded":
-                qid = q.get("question_id", f"q_{q.get('index', '?')}")
-                null_question_ids.append(qid)
-
-        config_snapshot_path = manifest.get("config_snapshot_path", "")
-
-        return latest_manifest, null_question_ids, config_snapshot_path
+        # Exact match: same number of keys and same values for all keys
+        return snapshot_config == expected_config
 
 
 class StreamingJobSummary:
@@ -952,7 +1048,7 @@ class StreamingJobSummary:
         filename_id = f"{timestamp_str}_{job_task_id}"
 
         self._summary_path = (
-            exp_root_path / benchmark / experiment / "job_summary" / f"{filename_id}.json"
+            exp_root_path / benchmark / experiment / "task_summary" / f"{filename_id}.json"
         )
         self._summary_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -986,7 +1082,7 @@ class StreamingJobSummary:
             "status": "in_progress",
             "processing_statistics": {
                 "questions_total": self.questions_total,
-                "questions_completed": len(self.per_transcript_stats),
+                "questions_attempted": self.questions_succeeded + self.questions_partial + self.questions_failed,
                 "questions_succeeded": self.questions_succeeded,
                 "questions_partial": self.questions_partial,
                 "questions_failed": self.questions_failed,
@@ -1059,9 +1155,9 @@ class StreamingJobSummary:
         if self._summary_path is None:
             return ""
 
-        # Use the existing save_job_summary for final comprehensive output
+        # Use the existing save_task_summary for final comprehensive output
         manager = BookkeepingManager(self.project_root)
-        return manager.save_job_summary(
+        return manager.save_task_summary(
             config=self.config,
             questions_total=self.questions_total,
             questions_succeeded=self.questions_succeeded,
@@ -1124,7 +1220,7 @@ class GridManifestManager:
         Returns:
             Path to the saved snapshot (with $MAC_FAIRNESS_WORKSPACE prefix)
         """
-        snapshot_dir = self.project_root / "bookkeeping" / "grid_config_snapshot"
+        snapshot_dir = self.project_root / "bookkeeping" / "_grid_config_snapshot"
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
         # Use same naming convention as config_snapshot: {config_name}_{timestamp}.yaml
@@ -1138,7 +1234,7 @@ class GridManifestManager:
         shutil.copy2(grid_config_path, snapshot_path)
 
         # Return path with $MAC_FAIRNESS_WORKSPACE prefix for portability
-        return f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/grid_config_snapshot/{snapshot_filename}"
+        return f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/_grid_config_snapshot/{snapshot_filename}"
 
     def save_grid_manifest(
         self,
@@ -1146,8 +1242,8 @@ class GridManifestManager:
         expanded_configs: list,
         submission_timestamp: datetime,
         is_resume: bool = False,
-        processed_run_info: Optional[Dict[int, Dict[str, Any]]] = None,
-    ) -> Path:
+        succeeded_task_info: Optional[Dict[int, Dict[str, Any]]] = None,
+    ) -> Tuple[Path, str]:
         """Save a grid manifest at the start of a grid run.
 
         Args:
@@ -1155,11 +1251,11 @@ class GridManifestManager:
             expanded_configs: List of (config, grid_sweep_specs) tuples from GridConfigExpander
             submission_timestamp: When the grid run started
             is_resume: If True, grid_config_path is already a snapshot; reuse it
-            processed_run_info: Dict mapping run_id to the full run entry dict for runs
+            succeeded_task_info: Dict mapping task_id to the full run entry dict for runs
                 that were already processed (for resume). The run entries are used directly.
 
         Returns:
-            Path to the saved manifest file
+            Tuple of (manifest_path, _grid_config_snapshot_path)
         """
         manifest_dir = self._get_manifest_dir()
         manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -1172,26 +1268,26 @@ class GridManifestManager:
         if is_resume:
             # On resume, grid_config_path is already the snapshot path
             snapshot_filename = Path(grid_config_path).name
-            grid_config_snapshot_path = f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/grid_config_snapshot/{snapshot_filename}"
+            _grid_config_snapshot_path = f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/_grid_config_snapshot/{snapshot_filename}"
         else:
-            grid_config_snapshot_path = self._save_grid_config_snapshot(
+            _grid_config_snapshot_path = self._save_grid_config_snapshot(
                 grid_config_path, submission_timestamp
             )
 
-        if processed_run_info is None:
-            processed_run_info = {}
+        if succeeded_task_info is None:
+            succeeded_task_info = {}
 
         # Build experiment run entries
-        experiment_runs = []
+        tasks = []
         for i, (config, grid_sweep_specs) in enumerate(expanded_configs):
-            if i in processed_run_info:
+            if i in succeeded_task_info:
                 # Reuse the full run entry from the old manifest (preserves all info)
-                experiment_runs.append(processed_run_info[i])
+                tasks.append(succeeded_task_info[i])
             else:
                 # New run entry
                 exp_meta = config.get("experiment_metadata", {})
-                experiment_runs.append({
-                    "run_id": i,
+                tasks.append({
+                    "task_id": i,
                     "experiment_name": exp_meta.get("experiment_name", "unknown"),
                     "benchmark_subcategory": exp_meta.get("benchmark_subcategory", "unknown"),
                     "grid_sweep_specs": grid_sweep_specs,
@@ -1201,12 +1297,12 @@ class GridManifestManager:
                 })
 
         manifest = {
-            "grid_config_snapshot_path": grid_config_snapshot_path,
+            "grid_config_snapshot_path": _grid_config_snapshot_path,
             "pid": pid,
             "submission_timestamp": format_timestamp(submission_timestamp),
-            "num_runs_planned": len(experiment_runs),
-            "num_runs_processed": len(processed_run_info),
-            "experiment_runs": experiment_runs,
+            "num_tasks_planned": len(tasks),
+            "num_tasks_succeeded": len(succeeded_task_info),
+            "tasks": tasks,
             "created_at": format_timestamp(datetime.now(timezone.utc)),
         }
 
@@ -1214,19 +1310,19 @@ class GridManifestManager:
             json.dump(manifest, f, indent=2)
 
         info_print(f"Grid manifest saved: {display_path(manifest_path, self.project_root)}")
-        return manifest_path
+        return manifest_path, _grid_config_snapshot_path
 
-    def mark_run_started(self, manifest_path: Path, run_id: int) -> None:
-        """Mark an experiment run as started.
+    def mark_task_started(self, manifest_path: Path, task_id: int) -> None:
+        """Mark a task as started.
 
         Status values:
         - null: not yet run, or stopped abruptly (needs re-run)
-        - "started": job started, may be interrupted (check job manifest for repair)
-        - "processed": job finished naturally (don't re-run)
+        - "started": task started, may be interrupted or some questions failed (needs re-run)
+        - "succeeded": all questions in the task succeeded (don't re-run)
 
         Args:
             manifest_path: Path to the manifest file
-            run_id: ID of the experiment run being started
+            task_id: ID of the task being started
         """
         if not manifest_path.exists():
             return
@@ -1241,10 +1337,10 @@ class GridManifestManager:
             info_print(f"Warning: Could not read grid manifest: {e}")
             return
 
-        runs = manifest.get("experiment_runs", [])
-        if 0 <= run_id < len(runs):
-            runs[run_id]["status"] = "started"
-            runs[run_id]["started_at"] = format_timestamp(
+        tasks = manifest.get("tasks", [])
+        if 0 <= task_id < len(tasks):
+            tasks[task_id]["status"] = "started"
+            tasks[task_id]["started_at"] = format_timestamp(
                 datetime.now(timezone.utc)
             )
 
@@ -1261,17 +1357,17 @@ class GridManifestManager:
                 temp_path.unlink(missing_ok=True)
             info_print(f"Warning: Could not write grid manifest: {e}")
 
-    def mark_run_processed(self, manifest_path: Path, run_id: int) -> None:
-        """Mark an experiment run as processed (job finished naturally).
+    def mark_task_succeeded(self, manifest_path: Path, task_id: int) -> None:
+        """Mark a task as succeeded (all questions completed successfully).
 
         Status values:
         - null: not yet run, or stopped abruptly (needs re-run)
-        - "started": job started, may be interrupted (check job manifest for repair)
-        - "processed": job finished naturally (don't re-run)
+        - "started": task started, may be interrupted or some questions failed (needs re-run)
+        - "succeeded": all questions in the task succeeded (don't re-run)
 
         Args:
             manifest_path: Path to the manifest file
-            run_id: ID of the experiment run that finished
+            task_id: ID of the task that succeeded
         """
         if not manifest_path.exists():
             return
@@ -1286,15 +1382,15 @@ class GridManifestManager:
             info_print(f"Warning: Could not read grid manifest: {e}")
             return
 
-        runs = manifest.get("experiment_runs", [])
-        if 0 <= run_id < len(runs):
-            runs[run_id]["status"] = "processed"
-            runs[run_id]["completed_at"] = format_timestamp(
+        tasks = manifest.get("tasks", [])
+        if 0 <= task_id < len(tasks):
+            tasks[task_id]["status"] = "succeeded"
+            tasks[task_id]["completed_at"] = format_timestamp(
                 datetime.now(timezone.utc)
             )
 
-        # Update processed count
-        manifest["num_runs_processed"] = manifest.get("num_runs_processed", 0) + 1
+        # Update succeeded count
+        manifest["num_tasks_succeeded"] = manifest.get("num_tasks_succeeded", 0) + 1
 
         # Atomic write: write to temp file, then rename
         # This ensures manifest is never left in a corrupted state on Ctrl+C
@@ -1310,15 +1406,15 @@ class GridManifestManager:
             info_print(f"Warning: Could not write grid manifest: {e}")
 
     def get_pending_indices(self, manifest_path: Path) -> list:
-        """Get indices of configurations that haven't been processed.
+        """Get indices of tasks that haven't succeeded.
 
-        Returns indices where status is null or "started" (not "processed").
+        Returns indices where status is null or "started" (not "succeeded").
 
         Args:
             manifest_path: Path to the manifest file
 
         Returns:
-            List of configuration indices that need to be run
+            List of task indices that need to be run
         """
         if not manifest_path.exists():
             return []
@@ -1334,19 +1430,19 @@ class GridManifestManager:
             return []
 
         pending = []
-        for run in manifest.get("experiment_runs", []):
-            if run.get("status") != "processed":
-                pending.append(run["run_id"])
+        for task in manifest.get("tasks", []):
+            if task.get("status") != "succeeded":
+                pending.append(task["task_id"])
         return pending
 
     def is_complete(self, manifest_path: Path) -> bool:
-        """Check if all configurations have been processed.
+        """Check if all tasks have succeeded.
 
         Args:
             manifest_path: Path to the manifest file
 
         Returns:
-            True if all configurations have status="processed"
+            True if all tasks have status="succeeded"
         """
         if not manifest_path.exists():
             return True
@@ -1361,11 +1457,11 @@ class GridManifestManager:
             info_print(f"Warning: Could not read grid manifest: {e}")
             return False
 
-        configs = manifest.get("experiment_runs", [])
-        return all(c.get("status") == "processed" for c in configs)
+        tasks = manifest.get("tasks", [])
+        return all(t.get("status") == "succeeded" for t in tasks)
 
     def delete_if_complete(self, manifest_path: Path) -> bool:
-        """Delete manifest and grid config snapshot if all configurations have been processed.
+        """Delete manifest and grid config snapshot if all tasks have succeeded.
 
         Args:
             manifest_path: Path to the manifest file
@@ -1375,11 +1471,11 @@ class GridManifestManager:
         """
         if self.is_complete(manifest_path):
             # Read manifest to get grid config snapshot path before deleting
-            grid_config_snapshot_path = None
+            _grid_config_snapshot_path = None
             try:
                 with open(manifest_path, "r") as f:
                     manifest = json.load(f)
-                    grid_config_snapshot_path = manifest.get("grid_config_snapshot_path")
+                    _grid_config_snapshot_path = manifest.get("grid_config_snapshot_path")
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -1391,9 +1487,9 @@ class GridManifestManager:
                 )
 
                 # Also delete the grid config snapshot
-                if grid_config_snapshot_path:
+                if _grid_config_snapshot_path:
                     # Resolve $MAC_FAIRNESS_WORKSPACE if present
-                    resolved_path = grid_config_snapshot_path
+                    resolved_path = _grid_config_snapshot_path
                     if resolved_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
                         resolved_path = resolved_path.replace(
                             "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
@@ -1461,36 +1557,36 @@ class GridManifestManager:
     def _extract_pending_from_manifest(
         self, manifest: dict
     ) -> Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]:
-        """Extract pending run IDs, started run info, and processed run info from a manifest.
+        """Extract pending task IDs, started task info, and succeeded task info from a manifest.
 
         Args:
             manifest: The manifest dictionary
 
         Returns:
-            Tuple of (pending_indices, started_run_info, processed_run_info).
-            started_run_info maps run_id to {"experiment_name", "benchmark_subcategory"}
-            for runs with status="started" (interrupted runs that may have partial progress).
-            processed_run_info maps run_id to the full run entry dict
-            for runs with status="processed" (to preserve all info on resume).
+            Tuple of (pending_indices, started_task_info, succeeded_task_info).
+            started_task_info maps task_id to {"experiment_name", "benchmark_subcategory"}
+            for tasks with status="started" (interrupted tasks that may have partial progress).
+            succeeded_task_info maps task_id to the full task entry dict
+            for tasks with status="succeeded" (to preserve all info on resume).
         """
         pending: List[int] = []
-        started_run_info: Dict[int, Dict[str, str]] = {}
-        processed_run_info: Dict[int, Dict[str, Any]] = {}
-        for run in manifest.get("experiment_runs", []):
-            status = run.get("status")
-            run_id = run["run_id"]
-            if status == "processed":
-                # Preserve the full run entry for processed runs
-                processed_run_info[run_id] = run
+        started_task_info: Dict[int, Dict[str, str]] = {}
+        succeeded_task_info: Dict[int, Dict[str, Any]] = {}
+        for task in manifest.get("tasks", []):
+            status = task.get("status")
+            task_id = task["task_id"]
+            if status == "succeeded":
+                # Preserve the full task entry for succeeded tasks
+                succeeded_task_info[task_id] = task
             else:
-                pending.append(run_id)
-                # For "started" runs, save info needed to find job manifest
+                pending.append(task_id)
+                # For "started" tasks, save info needed to find task manifest
                 if status == "started":
-                    started_run_info[run_id] = {
-                        "experiment_name": run.get("experiment_name", ""),
-                        "benchmark_subcategory": run.get("benchmark_subcategory", ""),
+                    started_task_info[task_id] = {
+                        "experiment_name": task.get("experiment_name", ""),
+                        "benchmark_subcategory": task.get("benchmark_subcategory", ""),
                     }
-        return pending, started_run_info, processed_run_info
+        return pending, started_task_info, succeeded_task_info
 
     def peek_manifest(
         self, grid_config_path: str
@@ -1504,7 +1600,7 @@ class GridManifestManager:
             grid_config_path: Path to the grid config file
 
         Returns:
-            Tuple of (pending_indices, started_run_info, processed_run_info) or None if no manifest found.
+            Tuple of (pending_indices, started_task_info, succeeded_task_info) or None if no manifest found.
         """
         result = self._find_manifest(grid_config_path)
         if result is None:
@@ -1515,30 +1611,30 @@ class GridManifestManager:
     def load_and_delete_manifest(
         self, grid_config_path: str
     ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]]:
-        """Load pending configurations from existing manifest and delete it.
+        """Load pending tasks from existing manifest and delete it.
 
         Finds the most recent manifest for this grid config, extracts pending
-        configuration indices (those without status="processed"), deletes the
+        task indices (those without status="succeeded"), deletes the
         manifest, and returns the pending indices along with info for "started"
-        runs (needed to find their job manifests for resume) and processed runs
+        tasks (needed to find their task manifests for resume) and succeeded tasks
         (to preserve timestamps).
 
         Args:
             grid_config_path: Path to the grid config file
 
         Returns:
-            Tuple of (pending_indices, started_run_info, processed_run_info) or None if no manifest found.
-            started_run_info maps run_id to {"experiment_name", "benchmark_subcategory"}
-            for runs with status="started" (interrupted runs that may have partial progress).
-            processed_run_info maps run_id to the full run entry dict
-            for runs with status="processed" (to preserve all info on resume).
+            Tuple of (pending_indices, started_task_info, succeeded_task_info) or None if no manifest found.
+            started_task_info maps task_id to {"experiment_name", "benchmark_subcategory"}
+            for tasks with status="started" (interrupted tasks that may have partial progress).
+            succeeded_task_info maps task_id to the full task entry dict
+            for tasks with status="succeeded" (to preserve all info on resume).
         """
         result = self._find_manifest(grid_config_path)
         if result is None:
             return None
 
         manifest_path, manifest = result
-        pending, started_run_info, processed_run_info = self._extract_pending_from_manifest(manifest)
+        pending, started_task_info, succeeded_task_info = self._extract_pending_from_manifest(manifest)
 
         # Delete the old manifest
         try:
@@ -1547,4 +1643,4 @@ class GridManifestManager:
         except OSError as e:
             info_print(f"Warning: Could not delete old manifest: {e}")
 
-        return pending, started_run_info, processed_run_info
+        return pending, started_task_info, succeeded_task_info

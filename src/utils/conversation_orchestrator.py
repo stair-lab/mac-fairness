@@ -122,14 +122,14 @@ class ConversationOrchestrator:
     def _extract_transcript_stats(
         self, transcript: Dict[str, Any], question_id: str
     ) -> Dict[str, Any]:
-        """Extract statistics from a completed transcript for job summary aggregation.
+        """Extract statistics from a completed transcript for task summary aggregation.
 
         Args:
             transcript: Completed transcript dictionary
             question_id: Question identifier
 
         Returns:
-            Dictionary of transcript statistics for job summary
+            Dictionary of transcript statistics for task summary
         """
         summary = transcript.get("conversation_summary", {})
         retry_stats = summary.get("retry_statistics", {})
@@ -219,17 +219,21 @@ class ConversationOrchestrator:
             "per_agent": per_agent,
         }
 
-    async def run_experiment(
+    async def run_job(
         self,
         question_ids: Optional[Set[str]] = None,
+        succeeded_questions: Optional[List[Dict[str, Any]]] = None,
     ):
-        """Run experiment with async parallel conversation processing.
+        """Run job with async parallel conversation processing.
 
         Runs all conversations in parallel using AsyncConversationRunner.
         Backend handles request queuing and batching (vLLM's max_num_seqs).
 
         Args:
             question_ids: Optional set of question IDs to process (for resume)
+            succeeded_questions: Optional list of question entries that already succeeded
+                (carried over from previous manifest on resume). These will be preserved
+                in the new manifest to ensure correct progress tracking.
         """
         start_time = datetime.now(timezone.utc)
 
@@ -241,19 +245,21 @@ class ConversationOrchestrator:
         self.initialize_router()
 
         try:
-            await self._run_experiment_inner(
+            await self._run_job_inner(
                 question_ids=question_ids,
+                succeeded_questions=succeeded_questions,
                 start_time=start_time,
             )
         finally:
             await self._cleanup_agents()
 
-    async def _run_experiment_inner(
+    async def _run_job_inner(
         self,
         question_ids: Optional[Set[str]],
+        succeeded_questions: Optional[List[Dict[str, Any]]],
         start_time: datetime,
     ):
-        """Inner experiment logic wrapped for cleanup."""
+        """Inner job logic wrapped for cleanup."""
         from src.utils.request_scheduler import RequestScheduler
         from src.agent.async_vllm_agent import AsyncVLLMAgent
 
@@ -267,29 +273,39 @@ class ConversationOrchestrator:
 
         info_print(f"Loaded {len(all_questions)} questions from {questions_file.name}")
 
+        # For resume, filter to only process pending questions
         if question_ids:
-            questions = [q for q in all_questions if q.get("question_id") in question_ids]
-            info_print(f"Processing {len(questions)} questions by ID filter")
+            questions_to_process = [q for q in all_questions if q.get("question_id") in question_ids]
+            info_print(f"Processing {len(questions_to_process)} questions by ID filter")
         else:
-            questions = all_questions
+            questions_to_process = all_questions
 
-        # Save job manifest (pre-registration of planned questions for recovery)
+        # Save task manifest (pre-registration of planned questions for recovery)
         # Each question starts with status=null, marked "succeeded" when complete
-        self.manifest_path = self.bookkeeping.save_job_manifest(
+        # For resume, succeeded_questions carries over questions that already succeeded
+        self.manifest_path = self.bookkeeping.save_task_manifest(
             config=self.config,
-            questions=questions,
+            questions=all_questions,  # Always save ALL questions for correct total count
             submission_timestamp=self.submission_timestamp,
             config_snapshot_path=self.snapshot_path,
+            succeeded_questions=succeeded_questions,
         )
 
-        # Initialize streaming job summary (updates in real-time as transcripts complete)
+        # Calculate total questions (for correct live status display)
+        # On resume: total = carried-over succeeded + questions being processed now
+        num_succeeded_carry_over = len(succeeded_questions) if succeeded_questions else 0
+        questions_total = num_succeeded_carry_over + len(questions_to_process)
+
+        # Initialize streaming task summary (updates in real-time as transcripts complete)
         streaming_summary = StreamingJobSummary(
             config=self.config,
-            questions_total=len(questions),
+            questions_total=questions_total,
             start_time=start_time,
             config_snapshot_path=self.snapshot_path,
             project_root=self.project_root,
         )
+        # Pre-populate succeeded count from carry-over
+        streaming_summary.questions_succeeded = num_succeeded_carry_over
 
         # Get effective backend config from vLLM agent (if available)
         # This includes actual max_num_seqs computed from KV cache availability
@@ -326,8 +342,9 @@ class ConversationOrchestrator:
         def progress_callback(
             completed: int, total: int, question_idx: int, transcript: Dict[str, Any]
         ):
-            question = questions[question_idx]
-            question_id = question.get("question_id", f"q_{question_idx}")
+            # Get question_id from transcript (source of truth)
+            question_id = transcript["experiment_metadata"]["question_id"]
+            question = questions_to_process[question_idx]
 
             # Save transcript immediately (can be lost on interrupt, recoverable)
             self.transcript_manager.save_transcript(transcript)
@@ -366,11 +383,11 @@ class ConversationOrchestrator:
             if not is_live_status_enabled():
                 info_print(f"[{completed}/{total}] Question {question_id}: {status}", prefix=False)
 
-        info_print(f"Processing {len(questions)} questions...", prefix=False)
+        info_print(f"Processing {len(questions_to_process)} questions...", prefix=False)
 
         # Run all questions with request-level scheduling
         await scheduler.run_questions(
-            questions=questions,
+            questions=questions_to_process,
             progress_callback=progress_callback,
         )
 
@@ -380,11 +397,11 @@ class ConversationOrchestrator:
         # Get effective backend config (includes auto-calculated max_num_seqs)
         effective_backend_config = AsyncVLLMAgent.get_effective_config()
 
-        # Finalize job summary
+        # Finalize task summary
         end_time = datetime.now(timezone.utc)
-        self.bookkeeping.save_job_summary(
+        self.bookkeeping.save_task_summary(
             config=self.config,
-            questions_total=len(questions),
+            questions_total=questions_total,
             questions_succeeded=streaming_summary.questions_succeeded,
             questions_partial=streaming_summary.questions_partial,
             questions_failed=streaming_summary.questions_failed,
@@ -453,7 +470,7 @@ class ConversationOrchestrator:
                     print(f"Ollama: {', '.join(config_parts)}")
 
         print(f"{'=' * 60}")
-        print(f"Total questions: {len(questions)}")
+        print(f"Total questions: {questions_total}")
         print(f"Succeeded: {streaming_summary.questions_succeeded}")
         print(f"Partial: {streaming_summary.questions_partial}")
         print(f"Failed: {streaming_summary.questions_failed}")
@@ -492,9 +509,9 @@ def main():
 
     args = parser.parse_args()
 
-    # Run experiment
+    # Run job
     orchestrator = ConversationOrchestrator(args.config)
-    asyncio.run(orchestrator.run_experiment())
+    asyncio.run(orchestrator.run_job())
 
 
 if __name__ == "__main__":

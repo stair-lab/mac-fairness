@@ -17,16 +17,16 @@ _grid:
       # - roman_colon
       # - roman_dot
       # - roman_paren
-      # - none
+      - none
     prompt_template_config.for_participant.json_field_order:
       - answer_first
       # - rationale_first
     agent_definitions.0.temperature:
       # - 0.1
       # - 0.3
-      # - 0.5
-      - 0.7
-      # - 0.9
+      - 0.5
+      # - 0.7
+      - 0.9
       # - 1.1
       # - 1.3
 
@@ -45,7 +45,7 @@ experiment_metadata:
   experiment_name: _ # Will be overwritten by sweep
   benchmark_subcategory: dev_vllm # use dev index, avoid contamination of production index.jsonl
   schema_version: "2025-12-10"
-  questions_file: "data/BBQ/bbq_race.jsonl"
+  questions_file: "data/dev_vllm/bbq_race_25qs.jsonl"
 
 # Conversation orchestration settings
 conversation_config:
@@ -82,7 +82,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 5 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: "FLASHINFER"
 

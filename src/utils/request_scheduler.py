@@ -15,6 +15,7 @@ from src.utils.errors import (
     MissingConfigSectionError,
     InvalidAnswerError,
     ErrorCollector,
+    UnexpectedError,
 )
 from src.utils.logging import is_debug_enabled, is_live_status_enabled
 
@@ -1050,6 +1051,31 @@ class RequestScheduler:
 
                 result = await self._execute_request(request)
                 self._on_request_complete(result)
+        except Exception as e:
+            # Handle unexpected exceptions to prevent conversation from getting stuck.
+            # Without this, unhandled exceptions cause the task to complete without
+            # marking the conversation as complete, leaving it orphaned with no requests
+            # in any queue, causing the scheduler loop to hang indefinitely.
+            conv_state = self.conversation_states[request.conversation_id]
+            if not conv_state.is_complete:
+                # Wrap in UnexpectedError for consistent error handling
+                question_id = (
+                    conv_state.question.get("question_id")
+                    if conv_state.question
+                    else None
+                )
+                wrapped_error = UnexpectedError(
+                    original_error=e,
+                    context="request execution",
+                    question_id=question_id,
+                )
+                conv_state.is_complete = True
+                self._remove_conversation_requests(request.conversation_id)
+                self._finalize_conversation(conv_state, error=wrapped_error)
+                _debug_print(
+                    f"Unexpected error in conversation {request.conversation_id}: "
+                    f"{type(e).__name__}: {e}"
+                )
         finally:
             # Decrement in-flight count when done (increment happens in scheduler loop)
             self.model_in_flight[model_name] -= 1

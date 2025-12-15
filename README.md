@@ -80,9 +80,9 @@ uv pip install -e .
 $MAC_FAIRNESS_WORKSPACE/
 │
 ├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
-│   ├── config_snapshot/                    # Immutable config snapshots from submitted jobs
+│   ├── config_snapshot/                    # Immutable config snapshots from submitted jobs, persistent storage
 │   │   └── {benchmark_subcategory}/        # Organized by benchmark subcategory
-│   ├── grid_config_snapshot/               # Immutable grid config snapshots for resume
+│   ├── _grid_config_snapshot/              # Immutable grid config snapshots for resume, not persistent storage
 │   │   └── {config_name}_{timestamp}.yaml
 │   ├── grid_manifest/                      # Grid manifests for interrupted grid run recovery
 │   │   └── {timestamp}_{pid}.json
@@ -90,9 +90,8 @@ $MAC_FAIRNESS_WORKSPACE/
 │   └── index.jsonl                         # Append-only index for production experiments
 │
 ├── config/                                 # Working configuration files (edit here)
-│   └── {benchmark_subcategory or custom}/  # Organize by benchmark subcategory, e.g., bbq_race, discrim_eval_age, or customized, e.g., production_vllm
-│       ├── {experiment_name}_grid.yaml     # Grid config for parameter sweeps
-│       └── {experiment_name}_scratch.yaml  # Regular config file
+│   └── {benchmark_subcategory or custom}/  # Organize by benchmark subcategory, e.g., bbq_race, discrim_eval_age, or customized
+│       └── {experiment_name}_scratch.yaml  # Job run config file
 │
 ├── data/                                   # Benchmark questions in unified format
 │   ├── BBQ/                                # BBQ benchmark family

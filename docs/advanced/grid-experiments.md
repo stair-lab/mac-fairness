@@ -128,14 +128,14 @@ bookkeeping/grid_manifest/{timestamp}_{pid}.json
 The grid config is also snapshotted at:
 
 ```text
-bookkeeping/grid_config_snapshot/{config_name}_{timestamp}.yaml
+bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml
 ```
 
 ### Structure of Grid Manifest
 
 ```json
 {
-  "grid_config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/grid_config_snapshot/...",
+  "grid_config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/_grid_config_snapshot/...",
   "pid": 12345,
   "submission_timestamp": "2025-12-13T10:00:00.000Z",
   "num_runs_planned": 8,
@@ -198,10 +198,10 @@ Resume **requires** using the grid config snapshot path (not the original config
 
 ```bash
 # Find your snapshot
-ls bookkeeping/grid_config_snapshot/
+ls bookkeeping/_grid_config_snapshot/
 
 # Resume using the snapshot path
-python script/run_experiment.py bookkeeping/grid_config_snapshot/{config_name}_{timestamp}.yaml --grid --resume
+python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml --grid --resume
 ```
 
 This ensures the same parameter combinations are used even if you've edited the original config file.
@@ -263,11 +263,11 @@ Grid Resume
 
 Grid resume builds on the [job recovery](job-recovery.md) system but uses different input paths:
 
-| Feature        | `repair_job.py`                               | `--grid --resume`                                     |
-| -------------- | --------------------------------------------- | ----------------------------------------------------- |
-| **Scope**      | Single job manifest                           | Grid manifest (multiple configs)                      |
-| **Input path** | `experiment/.../job_manifest/{manifest}.json` | `bookkeeping/grid_config_snapshot/{config}_{ts}.yaml` |
-| **Use case**   | Resume non-grid run                           | Resume grid run                                       |
+| Feature        | `repair_job.py`                               | `--grid --resume`                                      |
+| -------------- | --------------------------------------------- | ------------------------------------------------------ |
+| **Scope**      | Single job manifest                           | Grid manifest (multiple configs)                       |
+| **Input path** | `experiment/.../job_manifest/{manifest}.json` | `bookkeeping/_grid_config_snapshot/{config}_{ts}.yaml` |
+| **Use case**   | Resume non-grid run                           | Resume grid run                                        |
 
 ### Input Path Summary
 
@@ -280,7 +280,7 @@ python script/repair_job.py resume experiment/{benchmark}/{exp_name}/job_manifes
 **For grid experiments** — use `--grid --resume` with the **grid config snapshot path**:
 
 ```bash
-python script/run_experiment.py bookkeeping/grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
+python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
 ```
 
 > **Important**: Do NOT use the original config path for grid resume. The snapshot path ensures identical parameter expansion even if you've edited the original config.
@@ -330,8 +330,8 @@ Resume interrupted runs using the snapshot path:
 
 ```bash
 # Find and use the snapshot path
-ls bookkeeping/grid_config_snapshot/
-python script/run_experiment.py bookkeeping/grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
+ls bookkeeping/_grid_config_snapshot/
+python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
 ```
 
 ## Troubleshooting
