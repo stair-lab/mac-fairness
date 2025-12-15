@@ -94,7 +94,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2048 # sufficently large upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 256 # sufficently large upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: _ # will be overwritten by sweep
 

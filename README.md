@@ -273,7 +273,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: "FLASHINFER"
 
@@ -324,7 +324,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048 # context window size
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: "FLASHINFER" # optional
 ```
