@@ -5,6 +5,8 @@ private/
 # Experiment outputs
 bookkeeping/
 experiment/
+*.tar.gz
+*.tar.zst
 
 # Model caches (downloaded on servers)
 .cache/
