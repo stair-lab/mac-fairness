@@ -219,10 +219,35 @@ class ConversationOrchestrator:
             "per_agent": per_agent,
         }
 
+    def _extract_timestamp_from_snapshot(self, snapshot_path: str) -> datetime:
+        """Extract submission timestamp from snapshot filename.
+
+        Snapshot filename format: {experiment_name}_{timestamp}.yaml
+        Timestamp format: 20251204T120000.123Z
+
+        Args:
+            snapshot_path: Path to the config snapshot file
+
+        Returns:
+            Parsed datetime object (UTC)
+        """
+        # Get filename without extension: {exp_name}_{timestamp}
+        filename = Path(snapshot_path).stem
+        # Timestamp is after last underscore: 20251204T120000.123Z
+        timestamp_str = filename.split("_")[-1]
+        # Parse: 20251204T120000.123Z
+        dt_str = timestamp_str.rstrip("Z")
+        main_part, ms_part = dt_str.split(".")
+        dt = datetime.strptime(main_part, "%Y%m%dT%H%M%S")
+        dt = dt.replace(microsecond=int(ms_part) * 1000, tzinfo=timezone.utc)
+        return dt
+
     async def run_job(
         self,
         question_ids: Optional[Set[str]] = None,
         succeeded_questions: Optional[List[Dict[str, Any]]] = None,
+        existing_snapshot_path: Optional[str] = None,
+        old_manifest_path: Optional[Path] = None,
     ):
         """Run job with async parallel conversation processing.
 
@@ -234,11 +259,20 @@ class ConversationOrchestrator:
             succeeded_questions: Optional list of question entries that already succeeded
                 (carried over from previous manifest on resume). These will be preserved
                 in the new manifest to ensure correct progress tracking.
+            existing_snapshot_path: Optional path to existing config snapshot (for resume).
+                If provided, reuses this snapshot instead of creating a new one.
+            old_manifest_path: Optional path to old task manifest to delete after new
+                manifest is created (for atomic resume). Ensures create-then-delete order.
         """
         start_time = datetime.now(timezone.utc)
 
-        # Save config snapshot
-        self.save_config_snapshot()
+        # Reuse existing snapshot or create new one
+        if existing_snapshot_path:
+            self.snapshot_path = existing_snapshot_path
+            self.submission_timestamp = self._extract_timestamp_from_snapshot(existing_snapshot_path)
+            info_print(f"Reusing existing config snapshot: {Path(existing_snapshot_path).name}")
+        else:
+            self.save_config_snapshot()
 
         # Initialize components
         self.initialize_agents()
@@ -249,6 +283,7 @@ class ConversationOrchestrator:
                 question_ids=question_ids,
                 succeeded_questions=succeeded_questions,
                 start_time=start_time,
+                old_manifest_path=old_manifest_path,
             )
         finally:
             await self._cleanup_agents()
@@ -258,6 +293,7 @@ class ConversationOrchestrator:
         question_ids: Optional[Set[str]],
         succeeded_questions: Optional[List[Dict[str, Any]]],
         start_time: datetime,
+        old_manifest_path: Optional[Path] = None,
     ):
         """Inner job logic wrapped for cleanup."""
         from src.utils.request_scheduler import RequestScheduler
@@ -290,6 +326,11 @@ class ConversationOrchestrator:
             config_snapshot_path=self.snapshot_path,
             succeeded_questions=succeeded_questions,
         )
+
+        # Delete old manifest AFTER new one is created (atomic create-then-delete)
+        if old_manifest_path and old_manifest_path.exists():
+            old_manifest_path.unlink()
+            info_print(f"Deleted old task manifest: {old_manifest_path.name}")
 
         # Calculate total questions (for correct live status display)
         # On resume: total = carried-over succeeded + questions being processed now
@@ -423,12 +464,18 @@ class ConversationOrchestrator:
         print("EXPERIMENT COMPLETE")
         print(f"{'=' * 60}")
 
-        # Hardware & Model info
-        gpu_info = get_gpu_info()
-        print(f"GPU: {format_gpu_info(gpu_info)}")
-
         # Model and backend config info
         model_defs = self.config.get("model_definitions", {})
+
+        # Check if any backend is vLLM (GPU info only relevant for vLLM)
+        has_vllm = any(
+            model_def.get("backend") == "vllm"
+            for model_def in model_defs.values()
+        )
+        if has_vllm:
+            gpu_info = get_gpu_info()
+            print(f"GPU: {format_gpu_info(gpu_info)}")
+
         for model_name, model_def in model_defs.items():
             # vLLM uses model_path, Ollama uses model_name
             model_id = model_def.get("model_path") or model_def.get("model_name", "unknown")
@@ -489,8 +536,8 @@ class ConversationOrchestrator:
                 f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s"
             )
         if not manifest_deleted:
-            print(f"\nSome questions need repair. To resume:")
-            print(f"[ENV_VARS] python script/repair_job.py resume {self.manifest_path} [--dry-run]")
+            info_print("Some questions failed. To resume via grid:")
+            info_print("[ENV_VARS] python script/run_job.py <grid_config_snapshot> --grid --resume")
         print()  # Trailing newline
 
 

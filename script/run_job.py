@@ -33,7 +33,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -197,6 +197,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
     started_task_info: Dict[int, Dict[str, str]] = {}
 
     # Check for resume mode
+    old_grid_manifest_path: Optional[Path] = None
     if args.resume:
         # Resume requires using the grid config snapshot path
         config_parent = config_path.parent.name
@@ -210,35 +211,66 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             print()
             return 1
 
-        # For dry-run, peek at manifest without deleting; otherwise load and delete
-        if args.dry_run:
-            result = grid_manifest_manager.peek_manifest(str(config_path))
-        else:
-            result = grid_manifest_manager.load_and_delete_manifest(str(config_path))
+        # Load manifest for resume (without deleting - delete after new manifest is created)
+        result = grid_manifest_manager.load_manifest_for_resume(str(config_path))
 
         if result is not None:
-            pending_indices, started_task_info, succeeded_task_info = result
+            pending_indices, started_task_info, succeeded_task_info, old_grid_manifest_path = result
             if not pending_indices:
                 info_print(f"All configurations already completed. Nothing to resume.")
                 return 0
             started_count = len(started_task_info)
             info_print(f"Resuming: {len(pending_indices)} pending of {len(expanded_configs)} configurations")
             if started_count > 0:
-                info_print(f"  ({started_count} were previously started, will check job manifests for partial progress)")
+                info_print(f"  ({started_count} were previously started, will check task manifests for partial progress)")
         else:
             info_print(f"No existing manifest found for this snapshot.")
             info_print("Check bookkeeping/grid_manifest/ for available manifests.")
             return 1
 
-    # Handle dry-run for resume mode
+    # Handle dry-run for resume mode with tree output
     if args.dry_run:
         info_print("-" * 60, prefix=False)
         info_print("Configurations to resume:", prefix=False)
         for i in pending_indices:
             config, _ = expanded_configs[i]
             exp_name = config["experiment_metadata"]["experiment_name"]
-            status = "started" if i in started_task_info else "pending"
-            info_print(f"  [{i}] {exp_name} ({status})", prefix=False)
+
+            if i in started_task_info:
+                # Started task - get detailed info about null questions
+                run_info = started_task_info[i]
+                result = bookkeeping_manager.find_task_manifest_and_get_null_questions(
+                    experiment_name=run_info["experiment_name"],
+                    benchmark_subcategory=run_info["benchmark_subcategory"],
+                    expected_config=config,
+                )
+
+                if result is not None:
+                    _, null_question_ids, _, succeeded_questions = result
+                    null_count = len(null_question_ids)
+                    succeeded_count = len(succeeded_questions) if succeeded_questions else 0
+                    total = null_count + succeeded_count
+
+                    info_print(f"  [{i}] {exp_name} (started)", prefix=False)
+                    info_print(f"      ├── Progress: {succeeded_count}/{total} succeeded", prefix=False)
+                    info_print(f"      ├── Null questions: {null_count}", prefix=False)
+
+                    # Show first few null question IDs
+                    if null_question_ids:
+                        preview = null_question_ids[:5]
+                        for j, qid in enumerate(preview):
+                            is_last = (j == len(preview) - 1) and (len(null_question_ids) <= 5)
+                            prefix_char = "└" if is_last else "├"
+                            info_print(f"      │   {prefix_char}── {qid}", prefix=False)
+                        if len(null_question_ids) > 5:
+                            info_print(f"      │   └── ... and {len(null_question_ids) - 5} more", prefix=False)
+                else:
+                    # No task manifest found
+                    info_print(f"  [{i}] {exp_name} (started, no manifest found)", prefix=False)
+            else:
+                # Pending task - not started yet
+                info_print(f"  [{i}] {exp_name} (pending)", prefix=False)
+
         info_print(f"Dry run complete. {len(pending_indices)} configurations would be resumed.")
         return 0
 
@@ -252,6 +284,11 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
         str(config_path), expanded_configs, submission_timestamp,
         is_resume=args.resume, succeeded_task_info=succeeded_task_info
     )
+
+    # Delete old grid manifest AFTER new one is created (atomic create-then-delete)
+    if old_grid_manifest_path and old_grid_manifest_path.exists():
+        old_grid_manifest_path.unlink()
+        info_print(f"Deleted old grid manifest: {old_grid_manifest_path.name}")
 
     # Set module-level variable for signal handler to print resume command
     # (Process-local: only affects this Python process, not others)
@@ -302,7 +339,10 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
                 benchmark_subcategory=started_benchmark,
                 expected_config=config,
             )
-            if result is not None:
+            if result is None:
+                # Task was marked started but no manifest found - run fresh
+                info_print(f"  Warning: Task was started but no manifest found, running all questions")
+            else:
                 old_task_manifest_path, null_question_ids, task_config_snapshot, succeeded_questions = result
                 question_ids = set(null_question_ids)
                 if not question_ids:
@@ -347,14 +387,13 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             # Run experiment
             orchestrator = ConversationOrchestrator(config_to_use)
 
-            # Delete old task manifest now that a new one will be created
-            if old_task_manifest_path and old_task_manifest_path.exists():
-                old_task_manifest_path.unlink()
-                info_print(f"  Deleted old task manifest: {old_task_manifest_path.name}")
-
+            # Pass existing_snapshot_path for resume (avoids creating duplicate snapshots)
+            # Pass old_manifest_path for atomic create-then-delete
             asyncio.run(orchestrator.run_job(
                 question_ids=question_ids,
                 succeeded_questions=succeeded_questions,
+                existing_snapshot_path=resume_config_path,
+                old_manifest_path=old_task_manifest_path,
             ))
 
             successful += 1
@@ -402,16 +441,27 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
 def main() -> int:
     """Main entry point for experiment runner.
 
+    Grid configuration is the ONLY entry point. Even single-task experiments
+    should use a grid config with one configuration for consistent behavior.
+
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
     parser = argparse.ArgumentParser(
-        description="Run multi-agent conversation experiment",
+        description="Run multi-agent conversation experiments (grid config required)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run full experiment
-  CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 python script/run_job.py config/bbq_race/llama33_70b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+  # Run a grid experiment
+  CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 \\
+    python script/run_job.py config/my_exp/my_grid_config.yaml --grid
+
+  # Dry run to see expanded configurations
+  python script/run_job.py config/my_exp/my_grid_config.yaml --grid --dry-run
+
+  # Resume an interrupted grid run
+  CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 \\
+    python script/run_job.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
 
 Environment Variables:
   MAC_FAIRNESS_DEBUG_FLAG - Enable debug output
@@ -420,13 +470,14 @@ Environment Variables:
     )
 
     parser.add_argument(
-        "config", type=str, help="Path to experiment configuration YAML file"
+        "config", type=str, help="Path to grid configuration YAML file (or snapshot for resume)"
     )
 
     parser.add_argument(
         "--grid",
         action="store_true",
-        help="Treat config as grid config and expand parameter combinations",
+        required=True,
+        help="Required flag to run grid experiments",
     )
 
     parser.add_argument(
@@ -438,106 +489,17 @@ Environment Variables:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Resume a grid run from the most recent manifest (requires --grid)",
+        help="Resume a grid run from the most recent manifest",
     )
 
     args = parser.parse_args()
-
-    # Validate --resume requires --grid
-    if args.resume and not args.grid:
-        info_print("Error: --resume requires --grid flag")
-        return 1
 
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Handle grid config mode
-    if args.grid:
-        return run_grid_experiments(args)
-
-    # Regular single-config mode
-    config_path = Path(args.config)
-    backend = None
-
-    try:
-        # Validate config before proceeding
-        config = validate_config(config_path)
-
-        # Check if config has _grid section but --grid not specified
-        expander = GridConfigExpander(str(config_path))
-        if expander.is_grid_config():
-            info_print("Error: Config has _grid section but --grid flag not specified.")
-            info_print("Use --grid to expand and run parameter combinations.")
-            return 1
-
-        schema_version = get_schema_version(config)
-        backend = get_backend_type(config)
-        exp_name = config.get("experiment_metadata", {}).get(
-            "experiment_name", "unknown"
-        )
-        questions_file = config.get("experiment_metadata", {}).get(
-            "questions_file", "unknown"
-        )
-        benchmark_subcategory = config.get("experiment_metadata", {}).get(
-            "benchmark_subcategory", "unknown"
-        )
-
-        # Print header
-        info_print("=" * 60, prefix=False)
-        info_print("Multi-Agent Conversation Framework", prefix=False)
-        info_print(f"Protocol Version: {schema_version}", prefix=False)
-        info_print("=" * 60, prefix=False)
-        info_print(f"✓ Config: {args.config}", prefix=False)
-        info_print(f"✓ Experiment: {exp_name}", prefix=False)
-        info_print(f"✓ Backend: {backend}", prefix=False)
-        info_print(f"✓ Benchmark: {benchmark_subcategory}", prefix=False)
-        info_print(f"✓ Questions: {questions_file}", prefix=False)
-
-        # Handle dry-run mode for regular configs
-        if args.dry_run:
-            info_print("Dry run complete. Configuration is valid.")
-            return 0
-
-        debug_print("Debug mode enabled")
-        debug_print(
-            f"Experiment root: {os.environ.get('MAC_FAIRNESS_EXPERIMENT_ROOT', 'experiment')}"
-        )
-
-        # Run job (async)
-        orchestrator = ConversationOrchestrator(str(config_path))
-        asyncio.run(orchestrator.run_job())
-
-        info_print("=" * 60, prefix=False)
-        info_print("✓ Experiment completed successfully!", prefix=False)
-        info_print("=" * 60, prefix=False)
-        return 0
-
-    except FileNotFoundError as e:
-        info_print(f"✗ Error: {e}", prefix=False)
-        return 1
-
-    except ValueError as e:
-        info_print(f"✗ Configuration error: {e}", prefix=False)
-        return 1
-
-    except KeyboardInterrupt:
-        info_print("✗ Experiment interrupted by user", prefix=False)
-        return 130
-
-    except Exception as e:
-        info_print("✗ Experiment failed with error:", prefix=False)
-        info_print(f"  {type(e).__name__}: {e}", prefix=False)
-        if is_debug_enabled():
-            import traceback
-
-            traceback.print_exc()
-        return 1
-
-    finally:
-        # Always cleanup resources
-        info_print("✓ Cleaning up resources...", prefix=False)
-        cleanup_resources(backend)
+    # Grid config is the only entry point
+    return run_grid_experiments(args)
 
 
 if __name__ == "__main__":

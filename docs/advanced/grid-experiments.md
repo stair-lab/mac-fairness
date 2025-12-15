@@ -88,14 +88,16 @@ You get 2 x 2 x 2 = 8 configurations total.
 
 ## Running Grid Experiments
 
+> **Note**: Grid configuration is the **only** entry point. Even single-task experiments should use a grid config with one configuration.
+
 ### Basic Usage
 
 ```bash
-# Run all configurations in a grid
-python script/run_experiment.py config/my_grid_config.yaml --grid
+# Run all configurations in a grid (--grid flag is required)
+python script/run_job.py config/my_grid_config.yaml --grid
 
 # Dry run to see expanded configurations
-python script/run_experiment.py config/my_grid_config.yaml --grid --dry-run
+python script/run_job.py config/my_grid_config.yaml --grid --dry-run
 ```
 
 ### Environment Variables
@@ -104,15 +106,15 @@ python script/run_experiment.py config/my_grid_config.yaml --grid --dry-run
 CUDA_VISIBLE_DEVICES=0,1 \
 OMP_NUM_THREADS=32 \
 MAC_FAIRNESS_LIVE_STATUS=1 \
-python script/run_experiment.py config/my_grid_config.yaml --grid
+python script/run_job.py config/my_grid_config.yaml --grid
 ```
 
 ### Output
 
-Each grid configuration:
+Each grid configuration (task):
 
 - Gets its own experiment directory
-- Generates its own job manifest, transcripts, and job summary
+- Generates its own task manifest, transcripts, and task summary
 - Uses a unique `job_task_id` format: `{pid}_{grid_index}` (e.g., `12345_0`, `12345_1`)
 
 ## Grid Manifests
@@ -138,19 +140,19 @@ bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml
   "grid_config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/_grid_config_snapshot/...",
   "pid": 12345,
   "submission_timestamp": "2025-12-13T10:00:00.000Z",
-  "num_runs_planned": 8,
-  "num_runs_processed": 2,
-  "experiment_runs": [
+  "num_tasks_planned": 8,
+  "num_tasks_succeeded": 2,
+  "tasks": [
     {
-      "run_id": 0,
+      "task_id": 0,
       "experiment_name": "exp_variant",
       "grid_sweep_specs": {
         // ...
       },
-      "status": "processed"
+      "status": "succeeded"
     },
     {
-      "run_id": 1,
+      "task_id": 1,
       "experiment_name": "exp_variant",
       "grid_sweep_specs": {
         // ...
@@ -158,7 +160,7 @@ bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml
       "status": "started"
     },
     {
-      "run_id": 2,
+      "task_id": 2,
       "experiment_name": "exp_variant",
       "grid_sweep_specs": {
         // ...
@@ -170,13 +172,13 @@ bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml
 }
 ```
 
-Note: Each individual run's `job_task_id` is `{pid}_{run_id}` (e.g., `12345_0`, `12345_1`).
+Note: Each task's `job_task_id` is `{pid}_{task_id}` (e.g., `12345_0`, `12345_1`).
 
 Status values:
 
 - `null`: Not yet started
-- `"started"`: Started but not completed (may have partial progress)
-- `"processed"`: Completed job
+- `"started"`: Started but not completed (may have partial progress in task manifest)
+- `"succeeded"`: All questions completed successfully
 
 ### Automatic Cleanup
 
@@ -201,7 +203,10 @@ Resume **requires** using the grid config snapshot path (not the original config
 ls bookkeeping/_grid_config_snapshot/
 
 # Resume using the snapshot path
-python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml --grid --resume
+[ENV_VARS] python script/run_job.py bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml --grid --resume
+
+# Dry run to see tree with null questions per started task
+python script/run_job.py bookkeeping/_grid_config_snapshot/{config_name}_{timestamp}.yaml --grid --resume --dry-run
 ```
 
 This ensures the same parameter combinations are used even if you've edited the original config file.
@@ -209,13 +214,13 @@ This ensures the same parameter combinations are used even if you've edited the 
 ### What Happens During Resume
 
 1. **Load grid manifest**: Finds the existing manifest for the config file
-1. **Identify pending/started configurations**: Skips already-processed ones
-1. **For started configurations**:
-   - Finds the job manifest from the previous run
+2. **Create new grid manifest**: With pending/started tasks carried over (atomic create-then-delete)
+3. **For started tasks**:
+   - Finds the task manifest from the previous run
    - Identifies questions with `null` status (not succeeded)
-   - Resumes only those questions using the original config snapshot
-1. **For pending configurations**: Runs them fresh
-1. **Update grid manifest**: Marks configurations as processed
+   - Resumes only those questions using the **original config snapshot** (no duplicates created)
+4. **For pending tasks**: Runs them fresh
+5. **Update grid manifest**: Marks tasks as succeeded on completion
 
 ### Resume Flow Diagram
 
@@ -230,10 +235,10 @@ Grid Resume
          │
          ▼
 ┌─────────────────┐     ┌─────────────────┐
-│ Config status?  │────▶│ processed       │──▶ Skip
+│ Task status?    │────▶│ succeeded       │──▶ Skip
 └────────┬────────┘     └─────────────────┘
          │
-         │ pending
+         │ pending (null)
          ▼
 ┌─────────────────┐
 │ Run fresh       │
@@ -242,7 +247,7 @@ Grid Resume
          │ started
          ▼
 ┌─────────────────┐
-│ Find job        │
+│ Find task       │
 │ manifest        │
 └────────┬────────┘
          │
@@ -255,35 +260,34 @@ Grid Resume
          ▼
 ┌─────────────────┐
 │ Resume with     │
-│ question_ids    │
+│ question_ids +  │
+│ original config │
+│ snapshot        │
 └─────────────────┘
 ```
 
-## Relationship to Job Recovery
+### Dry Run with Tree Output
 
-Grid resume builds on the [job recovery](job-recovery.md) system but uses different input paths:
+When using `--dry-run --resume`, started tasks show a tree with null question details:
 
-| Feature        | `repair_job.py`                               | `--grid --resume`                                      |
-| -------------- | --------------------------------------------- | ------------------------------------------------------ |
-| **Scope**      | Single job manifest                           | Grid manifest (multiple configs)                       |
-| **Input path** | `experiment/.../job_manifest/{manifest}.json` | `bookkeeping/_grid_config_snapshot/{config}_{ts}.yaml` |
-| **Use case**   | Resume non-grid run                           | Resume grid run                                        |
+```text
+------------------------------------------------------------
+Configurations to resume:
+  [0] exp_vary_temp_0.5 (started)
+      ├── Progress: 45/100 succeeded
+      ├── Null questions: 55
+      │   ├── q_100
+      │   ├── q_101
+      │   ├── q_102
+      │   ├── q_103
+      │   ├── q_104
+      │   └── ... and 50 more
+  [1] exp_vary_temp_0.7 (pending)
 
-### Input Path Summary
-
-**For non-grid experiments** — use `repair_job.py` with the **job manifest path**:
-
-```bash
-python script/repair_job.py resume experiment/{benchmark}/{exp_name}/job_manifest/{manifest}.json
+Dry run complete. 2 configurations would be resumed.
 ```
 
-**For grid experiments** — use `--grid --resume` with the **grid config snapshot path**:
-
-```bash
-python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
-```
-
-> **Important**: Do NOT use the original config path for grid resume. The snapshot path ensures identical parameter expansion even if you've edited the original config.
+> **Important**: Always use the grid config **snapshot path** for resume, not the original config. The snapshot ensures identical parameter expansion even if you've edited the original config.
 
 ## Best Practices
 
@@ -291,7 +295,7 @@ python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config}_{time
 
 ```bash
 # See what configurations will run
-python script/run_experiment.py config/my_grid_config.yaml --grid --dry-run
+python script/run_job.py config/my_grid_config.yaml --grid --dry-run
 ```
 
 ### 2. Start Small
@@ -331,7 +335,7 @@ Resume interrupted runs using the snapshot path:
 ```bash
 # Find and use the snapshot path
 ls bookkeeping/_grid_config_snapshot/
-python script/run_experiment.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
+[ENV_VARS] python script/run_job.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
 ```
 
 ## Troubleshooting
@@ -346,17 +350,12 @@ The resume command couldn't find a grid manifest for this config. Either:
 
 ### "All configurations already completed"
 
-All configurations in the grid manifest are marked as processed. The grid run is complete.
+All tasks in the grid manifest are marked as succeeded. The grid run is complete.
 
-### Configuration Skipped but Questions Failed
+### "Task was started but no manifest found"
 
-If a configuration is marked "processed" but has failed questions, use `repair_job.py` to repair that specific job:
+If a task was marked "started" in the grid manifest but no task manifest exists:
 
-```bash
-# Find the job manifest
-ls experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/
-
-# Analyze and resume
-python script/repair_job.py analyze experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/{manifest}.json
-python script/repair_job.py resume experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/{manifest}.json
-```
+- The task will run all questions from scratch (warning is printed)
+- This can happen if the process crashed before creating the task manifest
+- The behavior is correct - without a manifest, we can't know which questions succeeded

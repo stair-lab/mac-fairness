@@ -1588,46 +1588,26 @@ class GridManifestManager:
                     }
         return pending, started_task_info, succeeded_task_info
 
-    def peek_manifest(
+    def load_manifest_for_resume(
         self, grid_config_path: str
-    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]]:
-        """Peek at pending configurations from existing manifest without deleting.
+    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]], Path]]:
+        """Load manifest for resume WITHOUT deleting it.
 
-        Same as load_and_delete_manifest but does not delete the manifest.
-        Used for dry-run mode.
+        Returns the manifest path so the caller can delete it AFTER creating
+        the new manifest. This ensures atomic create-then-delete ordering.
 
         Args:
             grid_config_path: Path to the grid config file
 
         Returns:
-            Tuple of (pending_indices, started_task_info, succeeded_task_info) or None if no manifest found.
-        """
-        result = self._find_manifest(grid_config_path)
-        if result is None:
-            return None
-        _, manifest = result
-        return self._extract_pending_from_manifest(manifest)
-
-    def load_and_delete_manifest(
-        self, grid_config_path: str
-    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]]]]:
-        """Load pending tasks from existing manifest and delete it.
-
-        Finds the most recent manifest for this grid config, extracts pending
-        task indices (those without status="succeeded"), deletes the
-        manifest, and returns the pending indices along with info for "started"
-        tasks (needed to find their task manifests for resume) and succeeded tasks
-        (to preserve timestamps).
-
-        Args:
-            grid_config_path: Path to the grid config file
-
-        Returns:
-            Tuple of (pending_indices, started_task_info, succeeded_task_info) or None if no manifest found.
-            started_task_info maps task_id to {"experiment_name", "benchmark_subcategory"}
-            for tasks with status="started" (interrupted tasks that may have partial progress).
-            succeeded_task_info maps task_id to the full task entry dict
-            for tasks with status="succeeded" (to preserve all info on resume).
+            Tuple of (pending_indices, started_task_info, succeeded_task_info, old_manifest_path)
+            or None if no manifest found.
+            - pending_indices: Task IDs that need to be run (status != "succeeded")
+            - started_task_info: Maps task_id to {"experiment_name", "benchmark_subcategory"}
+              for tasks with status="started" (may have partial progress)
+            - succeeded_task_info: Maps task_id to full task entry dict for tasks
+              with status="succeeded" (to preserve all info on resume)
+            - old_manifest_path: Path to delete AFTER new manifest is created
         """
         result = self._find_manifest(grid_config_path)
         if result is None:
@@ -1636,11 +1616,4 @@ class GridManifestManager:
         manifest_path, manifest = result
         pending, started_task_info, succeeded_task_info = self._extract_pending_from_manifest(manifest)
 
-        # Delete the old manifest
-        try:
-            manifest_path.unlink()
-            info_print(f"Old manifest deleted: {manifest_path.name}")
-        except OSError as e:
-            info_print(f"Warning: Could not delete old manifest: {e}")
-
-        return pending, started_task_info, succeeded_task_info
+        return pending, started_task_info, succeeded_task_info, manifest_path

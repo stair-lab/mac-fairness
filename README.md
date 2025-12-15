@@ -32,8 +32,8 @@ uv pip install -e .
 # 3. Set experiments directory (recommended, otherwise defaults to $MAC_FAIRNESS_WORKSPACE/experiment)
 export MAC_FAIRNESS_EXPERIMENT_ROOT="/path/to/save/experiments"
 
-# 4. Run a real experiment
-[ENV_VARS] python script/run_experiment.py config/bbq_race/llama33_70b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+# 4. Run a real experiment (grid config is the only entry point)
+[ENV_VARS] python script/run_job.py config/my_exp/my_grid_config.yaml --grid
 # e.g., CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 python ...
 
 # 5. Query results
@@ -80,17 +80,17 @@ uv pip install -e .
 $MAC_FAIRNESS_WORKSPACE/
 │
 ├── bookkeeping/                            # Experiment metadata and snapshots (auto-generated)
-│   ├── config_snapshot/                    # Immutable config snapshots from submitted jobs, persistent storage
-│   │   └── {benchmark_subcategory}/        # Organized by benchmark subcategory
-│   ├── _grid_config_snapshot/              # Immutable grid config snapshots for resume, not persistent storage
+│   ├── _grid_config_snapshot/              # Grid config snapshots (ephemeral, auto-deleted on success)
 │   │   └── {config_name}_{timestamp}.yaml
-│   ├── grid_manifest/                      # Grid manifests for interrupted grid run recovery
+│   ├── config_snapshot/                    # Task config snapshots (persistent, audit trail)
+│   │   └── {benchmark_subcategory}/        # Organized by benchmark subcategory
+│   ├── grid_manifest/                      # Grid manifests (ephemeral, auto-deleted on success)
 │   │   └── {timestamp}_{pid}.json
 │   ├── dev_{backend}_index.jsonl           # Separate index for dev_{backend} pilot experiments, e.g., dev_vllm
 │   └── index.jsonl                         # Append-only index for production experiments
 │
 ├── config/                                 # Working configuration files (edit here)
-│   └── {benchmark_subcategory or custom}/  # Organize by benchmark subcategory, e.g., bbq_race, discrim_eval_age, or customized
+│   └── {benchmark_subcategory or custom}/  # Benchmark subcategory (e.g., bbq_race, discrim_eval_age) or exp variants
 │       └── {experiment_name}_scratch.yaml  # Job run config file
 │
 ├── data/                                   # Benchmark questions in unified format
@@ -111,11 +111,11 @@ $MAC_FAIRNESS_WORKSPACE/
 ├── experiment/                             # Experiment outputs (transcripts and summaries)
 │   └── {benchmark_subcategory}/            # Organized by benchmark subcategory
 │       └── {experiment_name}/
-│           ├── job_manifest/               # Job manifests for interrupted run recovery
+│           ├── task_manifest/              # Task manifests (ephemeral, auto-deleted on success)
 │           │   └── {timestamp}_{job_task_id}.json
-│           ├── job_summary/                # Job execution summaries (one per job run)
+│           ├── task_summary/               # Task execution summaries (persistent, one per task)
 │           │   └── {timestamp}_{job_task_id}.json
-│           └── transcript/                 # Conversation transcripts (one per question)
+│           └── transcript/                 # Conversation transcripts (persistent, one per question)
 │               └── {uuid}.json
 │
 ├── schema/                                 # Protocol schemas (versioned, documentation only)
@@ -131,8 +131,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │   │   └── download_models.sh              # Model downloading utilities
 │   ├── formatter/                          # Benchmark data formatter
 │   │   └── bbq_formatter.py                # BBQ benchmark formatter
-│   ├── repair_job.py                       # Analyze and resume interrupted job runs
-│   └── run_experiment.py                   # Run full experiment (all questions)
+│   └── run_job.py                          # Run grid experiments (main entry point)
 │
 ├── src/                                    # Source code
 │   ├── agent/                              # Agent implementations
@@ -170,11 +169,11 @@ $MAC_FAIRNESS_WORKSPACE/
 
 - Loads and validates experiment configurations (Python-based validation)
 - Saves immutable config snapshots to `bookkeeping/config_snapshot/{benchmark_subcategory}/`
-  - Snapshot saved at start of `run_experiment()` method
+  - Snapshot saved at start of `run_job()` method (or reuses existing on resume)
 - Manages agent initialization and conversation orchestration
 - Saves full conversation transcripts to `experiment/{benchmark_subcategory}/{experiment_name}/transcript/`
 - Updates `bookkeeping/index.jsonl` with thread-safe file locking
-- Saves job summaries to `experiment/{benchmark_subcategory}/{experiment_name}/job_summary/`
+- Saves task summaries to `experiment/{benchmark_subcategory}/{experiment_name}/task_summary/`
 
 **`config/{benchmark_subcategory}/`**: Working configuration files (what we're actively editing)
 
@@ -199,19 +198,45 @@ $MAC_FAIRNESS_WORKSPACE/
 
 ## 4. Configuration
 
-### Experiment-Level Configuration
+### Experiment-Level Grid Configuration
 
 Each experiment configuration defines the agent setup and routing strategy applied to ALL questions in a benchmark run.
 
 ```yaml
-# Dev vLLM configuration for meta-llama/Llama-3.3-70B-Instruct
+# Grid configuration - defines parameter sweep
+_grid:
+  # Derivation rules: automatically compute field values from other fields
+  # Uses {field.path} placeholders with full dot-notation paths
+  derive:
+    experiment_metadata.questions_file: "data/BBQ/{experiment_metadata.benchmark_subcategory}.jsonl"
 
-# Experiment identification
+  # Sweep parameters: all combinations will be generated and run
+  sweep:
+    experiment_metadata.experiment_name:
+      - my_exp_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10
+    experiment_metadata.benchmark_subcategory:
+      - bbq_race
+    prompt_template_config.for_participant.choice_display_format:
+      - bullet
+    prompt_template_config.for_participant.json_field_order:
+      - answer_first
+    agent_definitions.0.temperature:
+      - 0.5
+      - 0.7
+      - 0.9
+
+  # Zip: paired values that change together (not Cartesian product)
+  zip:
+    model_definitions:
+      - model_definitions.llm_0.model_path: meta-llama/Llama-3.3-70B-Instruct
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+
+# Base experiment configuration (used as template for all combinations)
 experiment_metadata:
-  experiment_name: llama33_70b_3agent_as-hybrid-demographics-persona_vanilla_v2025-12-10
-  benchmark_subcategory: dev_vllm
+  experiment_name: _ # Will be overwritten by sweep
+  benchmark_subcategory: _ # Will be overwritten by sweep
   schema_version: "2025-12-10"
-  questions_file: data/BBQ/bbq_race.jsonl
+  questions_file: _ # Will be overwritten by derive rule
 
 # Conversation orchestration settings
 conversation_config:
@@ -234,25 +259,23 @@ identity_reveal_config:
 # Prompt template configuration
 prompt_template_config:
   for_participant:
-    # How to display choices: bullet, letter/arabic/roman + _ + colon/dot/paren, none
-    choice_display_format: letter_dot
-    # Order of fields in JSON output: answer_first, rationale_first
-    json_field_order: answer_first
+    choice_display_format: _ # Will be overwritten by sweep
+    json_field_order: _ # Will be overwritten by sweep
 
 # Model definitions
 model_definitions:
-  llama33_70b:
+  llm_0:
     backend: vllm
-    model_path: meta-llama/Llama-3.3-70B-Instruct
+    model_path: _ # Will be overwritten by sweep
 
     vllm_config:
-      tensor_parallel_size: 2
+      tensor_parallel_size: _ # Will be overwritten by sweep
       gpu_memory_utilization: 0.95
       max_model_len: 2048
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
-      attention_backend: "FLASHINFER" # optional
+      attention_backend: "FLASHINFER"
 
 # Agent definitions
 agent_definitions:
@@ -261,17 +284,17 @@ agent_definitions:
     persona: doctor
     demographics: black
     if_as_human: true
-    model: llama33_70b
-    temperature: 0.7
+    model: llm_0
+    temperature: _ # Will be overwritten by sweep
     max_tokens: 512
 
   - agent_id: spkr_001
     role: participant
     persona: economist
-    demographics: white
+    demographics: white female
     if_as_human: true
-    model: llama33_70b
-    temperature: 0.7
+    model: llm_0
+    temperature: _ # Will be overwritten by sweep
     max_tokens: 512
 
   - agent_id: spkr_002
@@ -279,8 +302,8 @@ agent_definitions:
     persona: policy expert
     demographics: null
     if_as_human: false
-    model: llama33_70b
-    temperature: 0.7
+    model: llm_0
+    temperature: _ # Will be overwritten by sweep
     max_tokens: 512
 ```
 
@@ -301,7 +324,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048 # context window size
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: "FLASHINFER" # optional
 ```
@@ -384,11 +407,11 @@ Placing `answer` first ensures the answer is captured even if the response is tr
 
 All experiments follow a consistent naming scheme:
 
-`{model_abbr}_{n_agents}agent_as-{human|ai|hybrid|anonymous}-{varied_axes}_{routing_strategy}_v{PROTOCOL_VERSION}`
+`{exp_variant|model_abbr}_{n_agents}agent_as-{human|ai|hybrid|anonymous}-{varied_axes}_{routing_strategy}_v{PROTOCOL_VERSION}`
 
 Examples:
 
-- `gemma2_9b_3agent_as-human-demographics_vanilla_v2025-12-10`
+- `my_exp_3agent_as-human-demographics_vanilla_v2025-12-10`
 - `llama31_8b_4agent_as-ai-demographics-persona_vanilla_v2025-12-10`
 - `qwen25_7b_5agent_as-hybrid-persona_vanilla_v2025-12-10`
 - `qwen3_4b_2agent_as-anonymous_vanilla_v2025-12-10`
@@ -439,46 +462,64 @@ python script/formatter/discrim_eval_formatter.py \
 
 ## 5. Running Experiments
 
-### Local Execution
+> **Note**: Grid configuration is the **only** entry point. Even single-task experiments should use a grid config with one configuration. This ensures consistent behavior for resume, manifests, and lifecycle management.
+
+### Basic Usage
 
 ```bash
-# Run locally (snapshot saved at start, then executed immediately)
-[ENV_VARS] python script/run_experiment.py config/bbq_race/llama31_8b_3agent_as-human-demographics_vanilla_v2025-12-10_scratch.yaml
+# Run a grid experiment (required: --grid flag)
+[ENV_VARS] python script/run_job.py config/my_exp/my_grid_config.yaml --grid
+
+# Dry run to see expanded configurations
+python script/run_job.py config/my_exp/my_grid_config.yaml --grid --dry-run
+
+# Resume an interrupted grid run (use the snapshot path, NOT the original config)
+[ENV_VARS] python script/run_job.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
+
+# Dry run for resume (shows tree with null questions per task)
+python script/run_job.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume --dry-run
 ```
 
-**Execution workflow:**
+### Execution Workflow
 
-1. Load and save config snapshot to `bookkeeping/config_snapshot/{benchmark_subcategory}/{experiment_name}_{TIMESTAMP}.yaml`
-1. Load the snapshot (not scratch file) for execution
-1. Read questions from the specified JSONL file
-1. Initialize models using vLLM async engines
-1. Run each question with the experiment-level agent configurations
-1. Save transcripts to `{MAC_FAIRNESS_EXPERIMENT_ROOT}/{benchmark_subcategory}/{experiment_name}/transcript/{uuid}.json`
-1. Append to `bookkeeping/index.jsonl` with metadata for each transcript
-1. Generate job summary with execution statistics, metrics, and error aggregation
+For each task in a grid job:
+
+1. Create grid manifest and grid config snapshot (at grid start)
+2. For each task:
+   - Save task config snapshot to `bookkeeping/config_snapshot/{benchmark}/{experiment}_{timestamp}.yaml`
+   - Create task manifest with all questions (status: `null`)
+   - Run each question with the experiment-level agent configurations
+   - Save transcripts to `experiment/{benchmark}/{experiment}/transcript/{uuid}.json`
+   - Atomically update task manifest + index.jsonl on each question completion
+   - Save task summary with execution statistics
+3. On success: Delete task manifest, mark task as succeeded in grid manifest
+4. When all tasks succeed: Delete grid manifest and grid config snapshot
 
 ---
 
 ## 6. Output Structure
 
-### Job Manifests
+### Artifact Lifecycle
 
-Job manifests track question processing status for interrupted run recovery:
+| Artifact                 | Location                                   | Lifecycle                      | Purpose                               |
+| ------------------------ | ------------------------------------------ | ------------------------------ | ------------------------------------- |
+| **Grid config snapshot** | `bookkeeping/_grid_config_snapshot/`       | Ephemeral (deleted on success) | Resume grid with identical parameters |
+| **Grid manifest**        | `bookkeeping/grid_manifest/`               | Ephemeral (deleted on success) | Track task-level progress             |
+| **Task config snapshot** | `bookkeeping/config_snapshot/{benchmark}/` | **Persistent**                 | Audit trail, reproducibility          |
+| **Task manifest**        | `experiment/.../task_manifest/`            | Ephemeral (deleted on success) | Track question-level progress         |
+| **Task summary**         | `experiment/.../task_summary/`             | **Persistent**                 | Execution statistics, results         |
+| **Transcripts**          | `experiment/.../transcript/`               | **Persistent**                 | Conversation data                     |
 
-- Created at job start with all planned questions (status: `null`)
-- Updated as each question completes (status: `"succeeded"`)
+### Task Manifests
+
+Task manifests track question processing status for interrupted run recovery:
+
+- Created at task start with all planned questions (status: `null`)
+- Updated atomically as each question completes (status: `"succeeded"`)
 - **Deleted automatically** when all questions succeed
-- **Persists** if any questions have null status (e.g., interrupted job, partial/failed conversations)
+- **Persists** if any questions have null status (for grid resume)
 
-To resume an interrupted run:
-
-```bash
-# Analyze the manifest (no GPU required)
-python script/repair_job.py analyze experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/{manifest}.json
-
-# Resume null questions
-[ENV_VARS] python script/repair_job.py resume experiment/{benchmark_subcategory}/{experiment_name}/job_manifest/{manifest}.json
-```
+To resume, use `--grid --resume` with the grid config snapshot path (not the task manifest directly).
 
 ### Transcripts
 
@@ -500,9 +541,9 @@ Each transcript file (one per conversation) contains:
 - `conversation_summary.status`: "succeeded", "partial", or "failed"
 - `conversation_summary.consensus_reached`: true/false for QA (if succeeded), null otherwise
 
-### Job Summaries
+### Task Summaries
 
-Each job summary (one per job or array task) captures:
+Each task summary (one per task) captures:
 
 - **Execution Metadata**: Job ID, timestamps, duration, config snapshot path
 - **vLLM Configuration**: Model definitions and vLLM configs
@@ -538,9 +579,8 @@ The inclusion of full agent configurations enables high-level analysis directly 
 For detailed information on advanced features and internals, see:
 
 - **[Async Framework Architecture](docs/advanced/async-framework.md)**: Three-pool request scheduling, priority ordering, parallelism model, vLLM continuous batching integration, multi-model support
-- **[Error Handling and Recovery](docs/advanced/error-handling.md)**: Error class hierarchy, recording levels (message/transcript/job-summary), automatic recovery mechanisms, retry logic, graceful degradation
+- **[Error Handling and Recovery](docs/advanced/error-handling.md)**: Error class hierarchy, recording levels (message/transcript/task-summary), automatic recovery mechanisms, retry logic, graceful degradation
 - **[Grid Experiments](docs/advanced/grid-experiments.md)**: Parameter sweeps, grid configuration, grid manifests, resuming interrupted grid runs
-- **[Job Recovery](docs/advanced/job-recovery.md)**: Job manifests, analyzing interrupted runs, resuming null questions, the repair_job.py script
 - **[Prompt Templates](docs/advanced/prompt-templates.md)**: Round-based prompt structure, key design decisions, response processing, flexible answer matching, identity display generation, extending to other roles
 
 ---

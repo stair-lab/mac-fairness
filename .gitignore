@@ -20,7 +20,6 @@ slurm_logs/
 
 # Benchmark data
 raw_data/
-data/dev_*
 
 # Node.js / TypeScript
 node_modules/
