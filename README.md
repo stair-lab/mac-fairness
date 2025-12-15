@@ -68,7 +68,7 @@ uv pip install -e .
 | `CUDA_VISIBLE_DEVICES`         | No       | Specify which GPUs to use (e.g., `0`, `1` or `2,5`)                                                |
 | `OMP_NUM_THREADS`              | No       | Set OpenMP thread count to avoid CPU oversubscription (e.g., `8`)                                  |
 
-> **Note** when enabling live status display `MAC_FAIRNESS_LIVE_STATUS=1`, disable the debug flag `MAC_FAIRNESS_DEBUG_FLAG=0`
+> **Note**: When enabling live status display `MAC_FAIRNESS_LIVE_STATUS=1`, disable the debug flag `MAC_FAIRNESS_DEBUG_FLAG=0`
 
 ---
 
@@ -273,7 +273,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: "FLASHINFER"
 
@@ -324,7 +324,7 @@ model_definitions:
       gpu_memory_utilization: 0.95
       max_model_len: 2048 # context window size
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2048 # upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 256 # upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: "FLASHINFER" # optional
 ```
