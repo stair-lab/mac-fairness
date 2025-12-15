@@ -68,7 +68,7 @@ uv pip install -e .
 | `CUDA_VISIBLE_DEVICES`         | No       | Specify which GPUs to use (e.g., `0`, `1` or `2,5`)                                                |
 | `OMP_NUM_THREADS`              | No       | Set OpenMP thread count to avoid CPU oversubscription (e.g., `8`)                                  |
 
-> **Note** when enabling live status display `MAC_FAIRNESS_LIVE_STATUS=1`, disable the debug flag `MAC_FAIRNESS_DEBUG_FLAG=0`
+> **Note**: When enabling live status display `MAC_FAIRNESS_LIVE_STATUS=1`, disable the debug flag `MAC_FAIRNESS_DEBUG_FLAG=0`
 
 ---
 

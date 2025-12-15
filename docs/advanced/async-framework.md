@@ -102,6 +102,71 @@ In round 0:
 
 **Capacity**: Each model has a semaphore sized to the effective `max_num_seqs` (min of configured upper bound and KV cache capacity). This matches vLLM's internal batching capacity.
 
+## Decoupled Write Architecture
+
+To maximize GPU utilization, the scheduler decouples GPU execution from file I/O:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Request Execution Flow                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   async with semaphore:                                                     │
+│       result = await _execute_request()    ◀── GPU work (semaphore held)    │
+│                                                                             │
+│   # Semaphore RELEASED here                                                 │
+│                                                                             │
+│   await _on_request_complete(result)       ◀── State updates + file I/O     │
+│       ├── State updates (sync, fast)                                        │
+│       ├── Dependency resolution (sync)                                      │
+│       └── await _finalize_conversation()   ◀── If conversation done         │
+│             └── await asyncio.to_thread(progress_callback)                  │
+│                   └── Blocking file I/O runs in thread pool                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why This Matters
+
+When multiple processes write to shared files (e.g., `index.jsonl`), they contend for the same `fcntl.flock` exclusive lock. Without decoupling:
+
+1. Process A holds semaphore, finishes GPU work, waits for file lock
+2. While waiting, semaphore slot is wasted
+3. Event loop is blocked by `fcntl.flock` (blocking syscall)
+4. GPU starves because no new requests can be dispatched
+
+With decoupled writes:
+
+1. Process A finishes GPU work, **releases semaphore immediately**
+2. File I/O runs in thread pool via `asyncio.to_thread()`
+3. Event loop stays responsive, can dispatch new GPU requests
+4. GPU stays saturated even during lock contention
+
+### Execution Order Guarantees
+
+The design ensures correct ordering:
+
+1. **State updates before await**: All in-memory state changes (`conv_state`, `completed_transcripts`) happen synchronously before any `await`
+2. **Dependency resolution before await**: `_check_pending_for_readiness()` and `_create_round_requests()` run before file writes
+3. **Idempotent finalization**: `is_finalized` guard prevents duplicate writes even if called multiple times
+
+### File Write Atomicity
+
+The progress callback performs these operations:
+
+```python
+def progress_callback(completed, total, question_idx, transcript):
+    # 1. Save transcript (separate file, crash-recoverable)
+    transcript_manager.save_transcript(transcript)
+
+    # 2. Atomic update under fcntl.flock:
+    #    - task_manifest.json (question status → succeeded)
+    #    - index.jsonl append
+    bookkeeping.record_question_completion(...)
+```
+
+The `record_question_completion` holds an exclusive lock (`fcntl.flock`) and performs atomic writes (temp file + rename) to ensure `task_manifest.json` and `index.jsonl` are always consistent.
+
 ## Priority Ordering
 
 The pre-departure pool uses a 4-tuple priority for deterministic ordering:
@@ -131,7 +196,7 @@ A key concern: when a GPU finishes processing a request, could reordering the qu
 
 **The answer is no**, for several reasons:
 
-1. **Atomic state updates**: When a request completes, `_on_request_complete()` updates conversation state synchronously before `_check_pending_for_readiness()` moves new requests to pre-departure. The scheduler loop only sees consistent state.
+1. **Atomic state updates**: When a request completes, `_on_request_complete()` updates conversation state and resolves dependencies synchronously (before any `await`), then performs async file I/O. The scheduler loop only sees consistent state because all state mutations happen before yielding to the event loop.
 
 1. **Semaphore-based dispatch**: Requests are only dispatched when the model has capacity. Even if priorities change, the highest-priority request with available capacity is always chosen.
 
@@ -278,19 +343,23 @@ The backend is set via `VLLM_ATTENTION_BACKEND` environment variable internally.
 When a conversation encounters an unrecoverable error (e.g., `MaxRetriesExceededError`):
 
 ```python
-def _on_request_complete(self, result: RequestResult) -> None:
+async def _on_request_complete(self, result: RequestResult) -> None:
     if not result.success:
         conv_state.error = result.error
         conv_state.is_complete = True
         # Remove queued requests for this failed conversation
         self._remove_conversation_requests(request.conversation_id)
-        self._finalize_conversation(conv_state, error=result.error)
+        # Check pending pool before async finalization
+        self._check_pending_for_readiness()
+        # Finalize with async write (other coroutines can run during write)
+        await self._finalize_conversation(conv_state, error=result.error)
         return
 ```
 
 This ensures:
 
 - Failed conversation's pending/pre-departure requests are cleaned up
+- Dependency resolution happens immediately (before file writes)
 - Other conversations continue unaffected
 - Partial transcripts are saved for debugging
 
@@ -340,4 +409,4 @@ Enable with `MAC_FAIRNESS_LIVE_STATUS=1` to see real-time pool status:
 
 This helps diagnose bottlenecks and verify the scheduler is behaving as expected.
 
-> Use `tput cnorm`, if needed, to show cursor in terminal after exp with live status concludes.
+> **Note**: Use `tput cnorm`, if needed, to show cursor in terminal after exp with live status concludes.

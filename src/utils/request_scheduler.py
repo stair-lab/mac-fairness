@@ -881,8 +881,15 @@ class RequestScheduler:
         ]
         heapq.heapify(self.pre_departure_pool)
 
-    def _on_request_complete(self, result: RequestResult) -> None:
-        """Handle request completion - update state and check readiness."""
+    async def _on_request_complete(self, result: RequestResult) -> None:
+        """Handle request completion - update state and check readiness.
+
+        This method performs all state updates and dependency resolution
+        synchronously (before any await), then awaits the async finalization
+        if the conversation is complete. This ensures that:
+        1. Dependent requests are unblocked immediately (no waiting for writes)
+        2. File I/O happens in thread pool without blocking event loop
+        """
         request = result.request
         conv_state = self.conversation_states[request.conversation_id]
 
@@ -894,7 +901,10 @@ class RequestScheduler:
             conv_state.validation_errors.extend(result.validation_errors)
             # Remove any queued requests for this failed conversation
             self._remove_conversation_requests(request.conversation_id)
-            self._finalize_conversation(conv_state, error=result.error)
+            # Check pending pool before async finalization
+            self._check_pending_for_readiness()
+            # Finalize with async write (other coroutines can run during write)
+            await self._finalize_conversation(conv_state, error=result.error)
             return
 
         # Build message
@@ -937,6 +947,9 @@ class RequestScheduler:
             )
         )
 
+        # Track if we need to finalize after all sync work is done
+        should_finalize = False
+
         if conv_state.current_round_completed_agents == expected_agents:
             # Round complete - finalize it
             conv_state.conversation_rounds.append(
@@ -956,15 +969,20 @@ class RequestScheduler:
                 or not self.router.should_continue(next_round_id)
             ):
                 conv_state.is_complete = True
-                self._finalize_conversation(conv_state)
+                should_finalize = True
             else:
                 # Start next round
                 self._create_round_requests(conv_state, next_round_id)
 
-        # Check pending pool for newly ready requests
+        # Check pending pool for newly ready requests (sync, before any await)
+        # This ensures dependent requests are unblocked immediately
         self._check_pending_for_readiness()
 
-    def _finalize_conversation(
+        # Now do async finalization if needed (file I/O in thread pool)
+        if should_finalize:
+            await self._finalize_conversation(conv_state)
+
+    async def _finalize_conversation(
         self,
         conv_state: ConversationState,
         error: Optional[Exception] = None,
@@ -973,6 +991,10 @@ class RequestScheduler:
 
         This method is idempotent - calling it multiple times for the same
         conversation has no effect after the first call.
+
+        The progress callback (which performs blocking file I/O) is executed
+        in a thread pool via asyncio.to_thread() to avoid blocking the event
+        loop. This ensures GPU dispatch continues while file writes complete.
         """
         # Guard against double finalization
         if conv_state.is_finalized:
@@ -1023,9 +1045,13 @@ class RequestScheduler:
 
         self.completed_transcripts.append(transcript)
 
-        # Call progress callback
+        # Call progress callback in thread pool to avoid blocking event loop.
+        # The callback performs blocking file I/O (transcript save, manifest
+        # update with fcntl.flock, index.jsonl append). Running in a thread
+        # allows other coroutines (especially GPU dispatch) to continue.
         if self.progress_callback:
-            self.progress_callback(
+            await asyncio.to_thread(
+                self.progress_callback,
                 len(self.completed_transcripts),
                 self.total_questions,
                 conv_state.conversation_id,
@@ -1035,6 +1061,12 @@ class RequestScheduler:
     async def _execute_with_semaphore(self, request: Request) -> None:
         """Execute a single request with model-specific semaphore control.
 
+        The semaphore is released immediately after GPU work completes, before
+        calling _on_request_complete. This decouples GPU scheduling from file I/O:
+        - Semaphore slot becomes available for next GPU request immediately
+        - File writes (in _on_request_complete) happen in thread pool
+        - Event loop stays responsive, GPU stays saturated
+
         Note: model_in_flight is managed by the caller (_scheduler_loop) to ensure
         accurate capacity tracking before task creation.
         """
@@ -1042,7 +1074,9 @@ class RequestScheduler:
         model_name = self._get_model_for_agent(request.agent_id)
         semaphore = self.model_semaphores[model_name]
 
+        result = None
         try:
+            # GPU work under semaphore
             async with semaphore:
                 # Check if this conversation already failed
                 conv_state = self.conversation_states[request.conversation_id]
@@ -1050,7 +1084,18 @@ class RequestScheduler:
                     return
 
                 result = await self._execute_request(request)
-                self._on_request_complete(result)
+            # Semaphore RELEASED here - slot available for next GPU request
+
+            # State updates and file I/O happen outside semaphore
+            # _on_request_complete is async; file writes run in thread pool
+            if result is not None:
+                await self._on_request_complete(result)
+
+        except (SystemExit, KeyboardInterrupt):
+            # Suppress shutdown exceptions to avoid noisy "Task exception was never
+            # retrieved" warnings on Ctrl+C. Resources (GPU, locks, memory) are
+            # automatically released by the OS when the process exits.
+            pass
         except Exception as e:
             # Handle unexpected exceptions to prevent conversation from getting stuck.
             # Without this, unhandled exceptions cause the task to complete without
@@ -1071,7 +1116,8 @@ class RequestScheduler:
                 )
                 conv_state.is_complete = True
                 self._remove_conversation_requests(request.conversation_id)
-                self._finalize_conversation(conv_state, error=wrapped_error)
+                # Async finalization - file writes in thread pool
+                await self._finalize_conversation(conv_state, error=wrapped_error)
                 _debug_print(
                     f"Unexpected error in conversation {request.conversation_id}: "
                     f"{type(e).__name__}: {e}"
