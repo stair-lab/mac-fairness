@@ -44,13 +44,10 @@ _grid:
     model_definitions:
       - model_definitions.llm_0.model_path: google/gemma-2-27b-it
         model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
-        model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       # - model_definitions.llm_0.model_path: meta-llama/Llama-3.3-70B-Instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
       # - model_definitions.llm_0.model_path: meta-llama/Llama-3.1-70B-Instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
 
 # Base experiment configuration (used as template for all combinations)
 experiment_metadata:
@@ -96,7 +93,7 @@ model_definitions:
       dtype: auto # let vLLM auto-detect optimal dtype
       max_num_seqs_upper_bound: 256 # sufficently large upperbound, actual value limited by KV cache
       enable_prefix_caching: true
-      attention_backend: _ # will be overwritten by sweep
+      attention_backend: "FLASHINFER"
 
 # Agent definitions
 agent_definitions:
