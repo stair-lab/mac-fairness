@@ -10,7 +10,8 @@ from collections import Counter
 
 from src.utils.errors import ManifestParseError, ManifestWriteError, ProjectRootError
 from src.utils.logging import (
-    EXPERIMENT_ROOT_ENV,
+    MAC_FAIRNESS_EXPERIMENT_ROOT,
+    MAC_FAIRNESS_WORKSPACE,
     display_path,
     format_filename_timestamp,
     format_timestamp,
@@ -70,15 +71,12 @@ class BookkeepingManager:
         """Initialize the bookkeeping manager.
 
         Args:
-            project_root: Project root directory (auto-detected if None)
+            project_root: Project root directory (from MAC_FAIRNESS_WORKSPACE if None)
         """
         if project_root is None:
-            current = Path(__file__).resolve()
-            while current != current.parent:
-                if (current / "pyproject.toml").exists():
-                    self.project_root = current
-                    break
-                current = current.parent
+            workspace = os.environ.get(MAC_FAIRNESS_WORKSPACE)
+            if workspace:
+                self.project_root = Path(workspace)
             else:
                 raise ProjectRootError()
         else:
@@ -93,7 +91,7 @@ class BookkeepingManager:
         Returns:
             Dictionary of created directory paths
         """
-        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
+        exp_root = os.environ.get(MAC_FAIRNESS_EXPERIMENT_ROOT, "experiment")
         # Make exp_root absolute if not already
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
@@ -162,7 +160,7 @@ class BookkeepingManager:
         Returns:
             Path to the saved job summary file
         """
-        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
+        exp_root = os.environ.get(MAC_FAIRNESS_EXPERIMENT_ROOT, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root
@@ -593,7 +591,7 @@ class BookkeepingManager:
         Returns:
             Path to experiment root directory
         """
-        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
+        exp_root = os.environ.get(MAC_FAIRNESS_EXPERIMENT_ROOT, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root
@@ -1042,7 +1040,7 @@ class StreamingJobSummary:
 
     def _initialize_file(self) -> None:
         """Create and initialize the summary file."""
-        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
+        exp_root = os.environ.get(MAC_FAIRNESS_EXPERIMENT_ROOT, "experiment")
         exp_root_path = Path(exp_root)
         if not exp_root_path.is_absolute():
             exp_root_path = self.project_root / exp_root
@@ -1201,15 +1199,12 @@ class GridManifestManager:
         """Initialize the grid manifest manager.
 
         Args:
-            project_root: Project root directory (auto-detected if None)
+            project_root: Project root directory (from MAC_FAIRNESS_WORKSPACE if None)
         """
         if project_root is None:
-            current = Path(__file__).resolve()
-            while current != current.parent:
-                if (current / "pyproject.toml").exists():
-                    self.project_root = current
-                    break
-                current = current.parent
+            workspace = os.environ.get(MAC_FAIRNESS_WORKSPACE)
+            if workspace:
+                self.project_root = Path(workspace)
             else:
                 raise ProjectRootError()
         else:

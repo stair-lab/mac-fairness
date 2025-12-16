@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import asyncio
 
+from src.utils.answer_matcher import transform_llm_response
 from src.utils.errors import (
     MacFairnessError,
     MaxRetriesExceededError,
@@ -17,7 +18,11 @@ from src.utils.errors import (
     ErrorCollector,
     UnexpectedError,
 )
-from src.utils.logging import is_debug_enabled, is_live_status_enabled
+from src.utils.logging import (
+    ConversationTokenStats,
+    is_debug_enabled,
+    is_live_status_enabled,
+)
 
 # Global reference to live display for debug print coordination
 _live_display_instance: "LiveStatusDisplay | None" = None
@@ -325,51 +330,6 @@ class RequestResult:
     error: Optional[Exception] = None
     structured_response: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
-
-
-class ConversationTokenStats:
-    """Token statistics for a single conversation."""
-
-    def __init__(self):
-        self.prompt_tokens: List[int] = []
-        self.response_tokens: List[int] = []
-
-    def record(self, prompt_tokens: int, response_tokens: int) -> None:
-        """Record token counts for a single message."""
-        self.prompt_tokens.append(prompt_tokens)
-        self.response_tokens.append(response_tokens)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Return conversation-level token statistics."""
-        if not self.prompt_tokens:
-            return {
-                "total_messages": 0,
-                "prompt_tokens": {"total": 0, "avg": 0, "max": 0},
-                "response_tokens": {"total": 0, "avg": 0, "max": 0},
-                "combined_tokens": {"total": 0, "avg": 0, "max": 0},
-            }
-
-        combined = [p + r for p, r in zip(self.prompt_tokens, self.response_tokens)]
-        n = len(self.prompt_tokens)
-
-        return {
-            "total_messages": n,
-            "prompt_tokens": {
-                "total": sum(self.prompt_tokens),
-                "avg": round(sum(self.prompt_tokens) / n, 1),
-                "max": max(self.prompt_tokens),
-            },
-            "response_tokens": {
-                "total": sum(self.response_tokens),
-                "avg": round(sum(self.response_tokens) / n, 1),
-                "max": max(self.response_tokens),
-            },
-            "combined_tokens": {
-                "total": sum(combined),
-                "avg": round(sum(combined) / n, 1),
-                "max": max(combined),
-            },
-        }
 
 
 class RequestScheduler:
@@ -761,7 +721,7 @@ class RequestScheduler:
                     )
 
             # Transform response
-            transformed = self._transform_llm_response(
+            transformed = transform_llm_response(
                 structured_output, agent_config, question, answer_match_threshold
             )
 
@@ -828,57 +788,6 @@ class RequestScheduler:
             success=False,
             error=RuntimeError("Unexpected end of retry loop"),
         )
-
-    def _transform_llm_response(
-        self,
-        raw_response: Dict[str, Any],
-        agent_config: Dict[str, Any],
-        question: Dict[str, Any],
-        answer_match_threshold: float,
-    ) -> Dict[str, Any]:
-        """Transform LLM response format to schema format."""
-        from src.utils.answer_matcher import FlexibleAnswerMatcher
-
-        role = agent_config["role"]
-        question_type = question.get("question_type", "multiple_choice")
-        is_choice_question = question_type in ["binary", "multiple_choice"]
-
-        transformed: Dict[str, Any] = {
-            "response_type": role,
-            "rationale": raw_response.get("rationale", ""),
-        }
-
-        if role == "participant" and is_choice_question:
-            choices = question.get("choices", [])
-            answer_text = raw_response.get("answer", "")
-
-            if choices and answer_text:
-                matcher = FlexibleAnswerMatcher()
-                match_result = matcher.match_with_feedback(
-                    answer_text, choices, threshold=answer_match_threshold
-                )
-
-                match_details = match_result.get("match_details", [])
-                if (
-                    match_details
-                    and match_details[0].get("match_score") is not None
-                    and answer_match_threshold is not None
-                    and match_details[0]["match_score"] >= answer_match_threshold
-                ):
-                    transformed["opinion"] = match_details[0]["id"]
-                    transformed["_matched_answer_text"] = match_details[0]["text"]
-                    transformed["_answer_match_info"] = match_result
-                else:
-                    transformed["opinion"] = answer_text
-                    transformed["_answer_match_info"] = match_result
-            else:
-                transformed["opinion"] = answer_text
-        else:
-            transformed["opinion"] = raw_response.get(
-                "opinion", raw_response.get("answer", "")
-            )
-
-        return transformed
 
     def _remove_conversation_requests(self, conversation_id: int) -> None:
         """Remove all pending and pre-departure requests for a failed conversation.

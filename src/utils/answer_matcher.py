@@ -284,3 +284,66 @@ if __name__ == "__main__":
             print(
                 f"    - {item['id']}: {item['text']} (score: {item['match_score']:.2f}, type: {item['match_type']})"
             )
+
+
+def transform_llm_response(
+    raw_response: Dict[str, any],
+    agent_config: Dict[str, any],
+    question: Dict[str, any],
+    answer_match_threshold: float,
+) -> Dict[str, any]:
+    """Transform LLM response format to schema format.
+
+    Used by both AsyncConversationRunner and RequestScheduler to convert
+    raw LLM responses into the standardized transcript schema format.
+
+    Args:
+        raw_response: Raw response from LLM with 'answer' and 'rationale' fields
+        agent_config: Agent configuration with 'role' field
+        question: Question dict with 'question_type' and 'choices' fields
+        answer_match_threshold: Threshold for fuzzy answer matching
+
+    Returns:
+        Transformed response dict with 'response_type', 'rationale', 'opinion',
+        and optional '_matched_answer_text' and '_answer_match_info' fields
+    """
+    role = agent_config["role"]
+    question_type = question.get("question_type", "multiple_choice")
+    is_choice_question = question_type in ["binary", "multiple_choice"]
+
+    transformed: Dict[str, any] = {
+        "response_type": role,
+        "rationale": raw_response.get("rationale", ""),
+    }
+
+    if role == "participant" and is_choice_question:
+        choices = question.get("choices", [])
+        answer_text = raw_response.get("answer", "")
+
+        if choices and answer_text:
+            matcher = FlexibleAnswerMatcher()
+            match_result = matcher.match_with_feedback(
+                answer_text, choices, threshold=answer_match_threshold
+            )
+
+            match_details = match_result.get("match_details", [])
+            if (
+                match_details
+                and match_details[0].get("match_score") is not None
+                and answer_match_threshold is not None
+                and match_details[0]["match_score"] >= answer_match_threshold
+            ):
+                transformed["opinion"] = match_details[0]["id"]
+                transformed["_matched_answer_text"] = match_details[0]["text"]
+                transformed["_answer_match_info"] = match_result
+            else:
+                transformed["opinion"] = answer_text
+                transformed["_answer_match_info"] = match_result
+        else:
+            transformed["opinion"] = answer_text
+    else:
+        transformed["opinion"] = raw_response.get(
+            "opinion", raw_response.get("answer", "")
+        )
+
+    return transformed

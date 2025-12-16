@@ -21,6 +21,9 @@ MacFairnessError (base exception class)
 │   └── MaxRetriesExceededError      # Exhausted retry attempts (e.g., after a certain number of ValidationError's)
 ├── FileOperationError
 │   └── FileNotFoundError_           # Required file not found (trailing underscore avoids shadowing builtin)
+├── ManifestError                    # Base class for manifest-related errors
+│   ├── ManifestParseError           # Manifest JSON parsing failed
+│   └── ManifestWriteError           # Manifest file write failed
 ├── VLLMEngineError                  # Base class for vLLM backend errors
 │   ├── VLLMEngineNotStartedError    # Engine not started before use
 │   ├── VLLMEngineNotInitializedError # Engine not initialized
@@ -211,7 +214,7 @@ High-level statistics across all questions in an experiment:
 **Answer Matching and Recovery:**
 
 - Fuzzy matching with configurable threshold (default: 0.75)
-- Retry with clarification when answer doesn't match choices
+- Automatic retry with identical prompt when answer doesn't match choices (relies on temperature sampling for variation)
 - Stores both raw answer and matched choice for analysis
 
 **Graceful Degradation:**
@@ -230,20 +233,6 @@ collector.add_error(error)  # add individual errors
 summary = collector.get_summary()  # get detailed summary
 aggregated = collector.get_aggregated_summary()  # get user-friendly aggregation
 ```
-
-**RetryHandler Class:**
-
-```python
-handler = RetryHandler(max_retries=5)
-if handler.should_retry(error):  # determines if retry is appropriate
-    # Currently retries use the identical prompt without modification.
-    # Future extension: handler.get_retry_message() could provide error-specific hints to LLMs
-    pass
-else:
-    handler.raise_max_retries_error(agent_id)  # raise terminal error
-```
-
-> **Note**: The current implementation retries with the same original prompt. The flexible answer matching is designed to allow models to succeed without needing error feedback. Future versions may incorporate error-specific retry prompts via `get_retry_message()`.
 
 ## Configuration for Error Handling
 

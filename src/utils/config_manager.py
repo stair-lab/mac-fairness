@@ -1,5 +1,6 @@
 """Configuration management utilities."""
 
+import os
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,12 @@ from src.utils.errors import (
     FileNotFoundError_,
 )
 
-from src.utils.logging import display_path, format_filename_timestamp, info_print
+from src.utils.logging import (
+    MAC_FAIRNESS_WORKSPACE,
+    display_path,
+    format_filename_timestamp,
+    info_print,
+)
 
 
 class ConfigManager:
@@ -23,18 +29,14 @@ class ConfigManager:
 
         Args:
             config_path: Path to the configuration YAML file
-            project_root: Project root directory (auto-detected if None)
+            project_root: Project root directory (from MAC_FAIRNESS_WORKSPACE if None)
         """
         self.config_path = Path(config_path)
 
-        # Find project root if not provided
         if project_root is None:
-            current = Path(__file__).resolve()
-            while current != current.parent:
-                if (current / "pyproject.toml").exists():
-                    self.project_root = current
-                    break
-                current = current.parent
+            workspace = os.environ.get(MAC_FAIRNESS_WORKSPACE)
+            if workspace:
+                self.project_root = Path(workspace)
             else:
                 raise ProjectRootError()
         else:

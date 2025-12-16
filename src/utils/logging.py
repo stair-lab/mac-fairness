@@ -21,15 +21,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-# Environment variable names (exported for use by other modules)
-DEBUG_ENV = "MAC_FAIRNESS_DEBUG_FLAG"
-LIVE_STATUS_ENV = "MAC_FAIRNESS_LIVE_STATUS"
-WORKSPACE_ENV = "MAC_FAIRNESS_WORKSPACE"
-EXPERIMENT_ROOT_ENV = "MAC_FAIRNESS_EXPERIMENT_ROOT"
+# Environment variable names
+MAC_FAIRNESS_DEBUG_FLAG = "MAC_FAIRNESS_DEBUG_FLAG"
+MAC_FAIRNESS_LIVE_STATUS = "MAC_FAIRNESS_LIVE_STATUS"
+MAC_FAIRNESS_WORKSPACE = "MAC_FAIRNESS_WORKSPACE"
+MAC_FAIRNESS_EXPERIMENT_ROOT = "MAC_FAIRNESS_EXPERIMENT_ROOT"
 
-# Display names for path substitution
-WORKSPACE_VAR = "$MAC_FAIRNESS_WORKSPACE"
-EXPERIMENT_ROOT_VAR = "$MAC_FAIRNESS_EXPERIMENT_ROOT"
+# Display names for path substitution (with $ prefix for display)
+MAC_FAIRNESS_WORKSPACE_VAR = "$MAC_FAIRNESS_WORKSPACE"
+MAC_FAIRNESS_EXPERIMENT_ROOT_VAR = "$MAC_FAIRNESS_EXPERIMENT_ROOT"
 
 # Shared error code to user-friendly message mapping
 ERROR_CODE_MESSAGES = {
@@ -49,12 +49,12 @@ ERROR_CODE_MESSAGES = {
 
 def is_debug_enabled() -> bool:
     """Check if debug flag is enabled (checked at runtime)."""
-    return os.environ.get(DEBUG_ENV) == "1"
+    return os.environ.get(MAC_FAIRNESS_DEBUG_FLAG) == "1"
 
 
 def is_live_status_enabled() -> bool:
     """Check if live status display is enabled (checked at runtime)."""
-    return os.environ.get(LIVE_STATUS_ENV) == "1"
+    return os.environ.get(MAC_FAIRNESS_LIVE_STATUS) == "1"
 
 
 # =============================================================================
@@ -262,26 +262,23 @@ def display_path(
     """
     path_str = str(path)
 
-    exp_root = os.environ.get(EXPERIMENT_ROOT_ENV)
+    exp_root = os.environ.get(MAC_FAIRNESS_EXPERIMENT_ROOT)
     if exp_root:
         exp_root_str = str(Path(exp_root).resolve())
         if path_str.startswith(exp_root_str):
-            return path_str.replace(exp_root_str, EXPERIMENT_ROOT_VAR, 1)
+            return path_str.replace(exp_root_str, MAC_FAIRNESS_EXPERIMENT_ROOT_VAR, 1)
 
     if project_root is None:
-        current = Path(__file__).resolve()
-        while current != current.parent:
-            if (current / "pyproject.toml").exists():
-                project_root = current
-                break
-            current = current.parent
+        workspace = os.environ.get(MAC_FAIRNESS_WORKSPACE)
+        if workspace:
+            project_root = Path(workspace)
         else:
             return path_str
 
     root_str = str(project_root)
 
     if path_str.startswith(root_str):
-        return path_str.replace(root_str, WORKSPACE_VAR, 1)
+        return path_str.replace(root_str, MAC_FAIRNESS_WORKSPACE_VAR, 1)
 
     return path_str
 
@@ -305,24 +302,21 @@ def resolve_path(
     path_str = str(path)
 
     # Resolve $MAC_FAIRNESS_EXPERIMENT_ROOT if present
-    if path_str.startswith(EXPERIMENT_ROOT_VAR):
-        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV)
+    if path_str.startswith(MAC_FAIRNESS_EXPERIMENT_ROOT_VAR):
+        exp_root = os.environ.get(MAC_FAIRNESS_EXPERIMENT_ROOT)
         if exp_root:
-            return path_str.replace(EXPERIMENT_ROOT_VAR, str(Path(exp_root).resolve()), 1)
+            return path_str.replace(MAC_FAIRNESS_EXPERIMENT_ROOT_VAR, str(Path(exp_root).resolve()), 1)
 
     # Resolve $MAC_FAIRNESS_WORKSPACE if present
-    if path_str.startswith(WORKSPACE_VAR):
+    if path_str.startswith(MAC_FAIRNESS_WORKSPACE_VAR):
         if project_root is None:
-            current = Path(__file__).resolve()
-            while current != current.parent:
-                if (current / "pyproject.toml").exists():
-                    project_root = current
-                    break
-                current = current.parent
+            workspace = os.environ.get(MAC_FAIRNESS_WORKSPACE)
+            if workspace:
+                project_root = Path(workspace)
             else:
                 return path_str  # Can't resolve without project root
 
-        return path_str.replace(WORKSPACE_VAR, str(project_root), 1)
+        return path_str.replace(MAC_FAIRNESS_WORKSPACE_VAR, str(project_root), 1)
 
     return path_str
 
@@ -365,6 +359,60 @@ def aggregate_validation_errors(
         {"error": msg, "count": count}
         for msg, count in sorted(error_code_counts.items(), key=lambda x: -x[1])
     ]
+
+
+# =============================================================================
+# Token Statistics
+# =============================================================================
+
+
+class ConversationTokenStats:
+    """Token statistics for a single conversation.
+
+    Used by both AsyncConversationRunner and RequestScheduler to track
+    prompt and response token counts across messages in a conversation.
+    """
+
+    def __init__(self):
+        self.prompt_tokens: List[int] = []
+        self.response_tokens: List[int] = []
+
+    def record(self, prompt_tokens: int, response_tokens: int) -> None:
+        """Record token counts for a single message."""
+        self.prompt_tokens.append(prompt_tokens)
+        self.response_tokens.append(response_tokens)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return conversation-level token statistics."""
+        if not self.prompt_tokens:
+            return {
+                "total_messages": 0,
+                "prompt_tokens": {"total": 0, "avg": 0, "max": 0},
+                "response_tokens": {"total": 0, "avg": 0, "max": 0},
+                "combined_tokens": {"total": 0, "avg": 0, "max": 0},
+            }
+
+        combined = [p + r for p, r in zip(self.prompt_tokens, self.response_tokens)]
+        n = len(self.prompt_tokens)
+
+        return {
+            "total_messages": n,
+            "prompt_tokens": {
+                "total": sum(self.prompt_tokens),
+                "avg": round(sum(self.prompt_tokens) / n, 1),
+                "max": max(self.prompt_tokens),
+            },
+            "response_tokens": {
+                "total": sum(self.response_tokens),
+                "avg": round(sum(self.response_tokens) / n, 1),
+                "max": max(self.response_tokens),
+            },
+            "combined_tokens": {
+                "total": sum(combined),
+                "avg": round(sum(combined) / n, 1),
+                "max": max(combined),
+            },
+        }
 
 
 # =============================================================================

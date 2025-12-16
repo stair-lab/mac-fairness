@@ -13,6 +13,7 @@ from src.prompt.participant import ParticipantPromptBuilder
 from src.utils import (
     BookkeepingManager,
     ConfigManager,
+    MAC_FAIRNESS_WORKSPACE,
     MetricsCollector,
     ProjectRootError,
     TranscriptManager,
@@ -38,13 +39,9 @@ class ConversationOrchestrator:
         Args:
             config_path: Path to the configuration YAML file
         """
-        # Find project root
-        current = Path(__file__).resolve()
-        while current != current.parent:
-            if (current / "pyproject.toml").exists():
-                self.project_root = current
-                break
-            current = current.parent
+        workspace = os.environ.get(MAC_FAIRNESS_WORKSPACE)
+        if workspace:
+            self.project_root = Path(workspace)
         else:
             raise ProjectRootError()
 

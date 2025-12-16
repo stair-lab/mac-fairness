@@ -102,7 +102,6 @@ $MAC_FAIRNESS_WORKSPACE/
 │   │   ├── async-framework.md              # Async scheduling and GPU utilization
 │   │   ├── error-handling.md               # Error handling and recovery mechanisms
 │   │   ├── grid-experiments.md             # Parameter sweeps and grid configuration
-│   │   ├── job-recovery.md                 # Job manifests and resuming interrupted runs
 │   │   └── prompt-templates.md             # Prompt engineering and template design
 │   └── guide/
 │       └── dev_ollama_walkthrough.ipynb    # Local development testing with Ollama (no GPU required)

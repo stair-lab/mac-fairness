@@ -1,8 +1,8 @@
+# ! NOTE modify experiment name timestamp, e.g., 20251216T0630Z
+
 # Grid configuration for parameter sweep experiments
 # Dry run:  python script/run_experiment.py config/my_exp/exp_name_v2025-12-10_grid.yaml --grid --dry-run
 # Run with: python script/run_experiment.py config/my_exp/exp_name_v2025-12-10_grid.yaml --grid
-
-# ! NOTE modify experiment name
 
 # Grid configuration - defines parameter sweep
 _grid:
@@ -42,10 +42,9 @@ _grid:
   # Zip: paired values that change together (not Cartesian product)
   zip:
     custom_grouping: # name does not matter
-      # --> Prefix timestamp to exp name, e.g., 20251216T0630Z
-      - experiment_metadata.experiment_name: ZZZZZZZZZZZZZ_format-variant_llama33-70b_1agent_as-ai_v2025-12-10
-        model_definitions.llm_0.model_path: meta-llama/Llama-3.3-70B-Instruct
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+      - experiment_metadata.experiment_name: 20251216T2230Z_format-variant_gemma2-27b_1agent_as-ai_v2025-12-10
+        model_definitions.llm_0.model_path: google/gemma-2-27b-it
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
 
 # Base experiment configuration (used as template for all combinations)
 experiment_metadata:

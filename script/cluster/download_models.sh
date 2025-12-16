@@ -48,10 +48,10 @@ models=(
     "google/gemma-2-2b-it"
 
     # === Meta Llama (newest first) ===
-    "meta-llama/Llama-3.3-70B-Instruct"
+    # "meta-llama/Llama-3.3-70B-Instruct"
     "meta-llama/Llama-3.2-3B-Instruct"
     "meta-llama/Llama-3.2-1B-Instruct"
-    "meta-llama/Llama-3.1-70B-Instruct"
+    # "meta-llama/Llama-3.1-70B-Instruct"
     "meta-llama/Llama-3.1-8B-Instruct"
 
     # === Microsoft Phi (newest first) ===
