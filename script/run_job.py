@@ -42,7 +42,7 @@ project_root = Path(os.environ["MAC_FAIRNESS_WORKSPACE"])
 sys.path.insert(0, str(project_root))
 
 from src.utils import debug_print, is_debug_enabled
-from src.utils.logging import info_print
+from src.utils.logging import info_print, resolve_path
 from src.utils.bookkeeping_manager import BookkeepingManager, GridManifestManager, set_grid_index
 from src.utils.conversation_orchestrator import ConversationOrchestrator
 from src.utils.grid_config import GridConfigExpander
@@ -260,10 +260,13 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
                 )
 
                 if result is not None:
-                    _, null_question_ids, _, succeeded_questions = result
+                    _, null_question_ids, _, all_questions = result
                     null_count = len(null_question_ids)
-                    succeeded_count = len(succeeded_questions) if succeeded_questions else 0
-                    total = null_count + succeeded_count
+                    # all_questions contains both succeeded and null - count succeeded only
+                    succeeded_count = sum(
+                        1 for q in all_questions.values() if q.get("status") == "succeeded"
+                    ) if all_questions else 0
+                    total = len(all_questions) if all_questions else 0
 
                     info_print(f"  [{i}] {exp_name} (started)", prefix=False)
                     info_print(f"      ├── Progress: {succeeded_count}/{total} succeeded", prefix=False)
@@ -366,14 +369,11 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
                     continue
                 # Validate config snapshot exists and use it for resume
                 if task_config_snapshot:
-                    # Resolve $MAC_FAIRNESS_WORKSPACE if present
-                    resolved_snapshot = task_config_snapshot
-                    if resolved_snapshot.startswith("$MAC_FAIRNESS_WORKSPACE"):
-                        resolved_snapshot = resolved_snapshot.replace(
-                            "$MAC_FAIRNESS_WORKSPACE", str(project_root)
-                        )
+                    # Resolve env var for existence check only
+                    resolved_snapshot = resolve_path(task_config_snapshot, project_root)
                     if Path(resolved_snapshot).exists():
-                        resume_config_path = resolved_snapshot
+                        # Keep original path with env var for portability
+                        resume_config_path = task_config_snapshot
                         info_print(f"  Resuming {len(question_ids)} null questions using existing config snapshot")
                     else:
                         info_print(f"  Warning: Config snapshot not found: {task_config_snapshot}")
@@ -385,7 +385,8 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
         try:
             # For resume, use existing config snapshot; otherwise write new temp file
             if resume_config_path:
-                config_to_use = resume_config_path
+                # Resolve env var for file access (resume_config_path may have $MAC_FAIRNESS_WORKSPACE)
+                config_to_use = resolve_path(resume_config_path, project_root)
             else:
                 # Write config to a temporary file
                 with tempfile.NamedTemporaryFile(
@@ -401,9 +402,12 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             # Run experiment
             orchestrator = ConversationOrchestrator(config_to_use)
 
-            # Get skip_cleanup flag from grid manifest (computed at manifest creation)
-            # If True, next task uses same model - skip GPU unload to avoid reload overhead
-            skip_cleanup = grid_manifest_manager.get_task_skip_cleanup(manifest_path, i)
+            # skip_cleanup optimization disabled for now - vLLM engine reuse across tasks
+            # can propagate corrupted state (EngineCore crashes, OOM) to subsequent tasks.
+            # TODO: Implement engine health check before reuse, or recreate engine while
+            # keeping model loaded in GPU memory.
+            # skip_cleanup = grid_manifest_manager.get_task_skip_cleanup(manifest_path, i)
+            skip_cleanup = False
 
             # Pass existing_snapshot_path for resume (avoids creating duplicate snapshots)
             # Pass old_manifest_path for atomic create-then-delete

@@ -31,10 +31,6 @@ EXPERIMENT_ROOT_ENV = "MAC_FAIRNESS_EXPERIMENT_ROOT"
 WORKSPACE_VAR = "$MAC_FAIRNESS_WORKSPACE"
 EXPERIMENT_ROOT_VAR = "$MAC_FAIRNESS_EXPERIMENT_ROOT"
 
-# Keep private aliases for backwards compatibility within this module
-_WORKSPACE_VAR = WORKSPACE_VAR
-_EXPERIMENT_ROOT_VAR = EXPERIMENT_ROOT_VAR
-
 # Shared error code to user-friendly message mapping
 ERROR_CODE_MESSAGES = {
     "INVALID_ANSWER": "Invalid answer: has to be from choice text",
@@ -270,7 +266,7 @@ def display_path(
     if exp_root:
         exp_root_str = str(Path(exp_root).resolve())
         if path_str.startswith(exp_root_str):
-            return path_str.replace(exp_root_str, _EXPERIMENT_ROOT_VAR, 1)
+            return path_str.replace(exp_root_str, EXPERIMENT_ROOT_VAR, 1)
 
     if project_root is None:
         current = Path(__file__).resolve()
@@ -285,7 +281,48 @@ def display_path(
     root_str = str(project_root)
 
     if path_str.startswith(root_str):
-        return path_str.replace(root_str, _WORKSPACE_VAR, 1)
+        return path_str.replace(root_str, WORKSPACE_VAR, 1)
+
+    return path_str
+
+
+def resolve_path(
+    path: Union[str, Path], project_root: Union[str, Path, None] = None
+) -> str:
+    """Resolve a path containing environment variable placeholders to an absolute path.
+
+    This is the inverse of display_path(). Handles:
+    - $MAC_FAIRNESS_WORKSPACE: Replaced with project root
+    - $MAC_FAIRNESS_EXPERIMENT_ROOT: Replaced with experiment root (if set)
+
+    Args:
+        path: The path to resolve (may contain env var placeholders)
+        project_root: Project root for $MAC_FAIRNESS_WORKSPACE (auto-detected if None)
+
+    Returns:
+        Absolute path string with env var placeholders resolved
+    """
+    path_str = str(path)
+
+    # Resolve $MAC_FAIRNESS_EXPERIMENT_ROOT if present
+    if path_str.startswith(EXPERIMENT_ROOT_VAR):
+        exp_root = os.environ.get(EXPERIMENT_ROOT_ENV)
+        if exp_root:
+            return path_str.replace(EXPERIMENT_ROOT_VAR, str(Path(exp_root).resolve()), 1)
+
+    # Resolve $MAC_FAIRNESS_WORKSPACE if present
+    if path_str.startswith(WORKSPACE_VAR):
+        if project_root is None:
+            current = Path(__file__).resolve()
+            while current != current.parent:
+                if (current / "pyproject.toml").exists():
+                    project_root = current
+                    break
+                current = current.parent
+            else:
+                return path_str  # Can't resolve without project root
+
+        return path_str.replace(WORKSPACE_VAR, str(project_root), 1)
 
     return path_str
 

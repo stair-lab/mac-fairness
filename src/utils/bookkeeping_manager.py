@@ -16,6 +16,7 @@ from src.utils.logging import (
     format_timestamp,
     info_print,
     is_debug_enabled,
+    resolve_path,
 )
 
 
@@ -907,7 +908,14 @@ class BookkeepingManager:
         if not manifest_dir.exists():
             return None
 
-        # Find all manifests for this experiment
+        # Clean up any stale .json.tmp files from interrupted writes
+        for tmp_file in manifest_dir.glob("*.json.tmp"):
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass  # Best-effort cleanup
+
+        # Find all manifests for this experiment (*.json excludes .json.tmp)
         manifests = list(manifest_dir.glob("*.json"))
         if not manifests:
             return None
@@ -968,13 +976,8 @@ class BookkeepingManager:
         """
         import yaml
 
-        # Resolve $MAC_FAIRNESS_WORKSPACE if present
-        resolved_path = config_snapshot_path
-        if resolved_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
-            resolved_path = resolved_path.replace(
-                "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
-            )
-
+        # Resolve env var placeholders to absolute path
+        resolved_path = resolve_path(config_snapshot_path, self.project_root)
         snapshot_path = Path(resolved_path)
         if not snapshot_path.exists():
             return False
@@ -1529,12 +1532,8 @@ class GridManifestManager:
 
                 # Also delete the grid config snapshot
                 if _grid_config_snapshot_path:
-                    # Resolve $MAC_FAIRNESS_WORKSPACE if present
-                    resolved_path = _grid_config_snapshot_path
-                    if resolved_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
-                        resolved_path = resolved_path.replace(
-                            "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
-                        )
+                    # Resolve env var placeholders to absolute path
+                    resolved_path = resolve_path(_grid_config_snapshot_path, self.project_root)
                     snapshot_path = Path(resolved_path)
                     if snapshot_path.exists():
                         snapshot_path.unlink(missing_ok=True)
@@ -1563,6 +1562,13 @@ class GridManifestManager:
         if not manifest_dir.exists():
             return None
 
+        # Clean up any stale .json.tmp files from interrupted writes
+        for tmp_file in manifest_dir.glob("*.json.tmp"):
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass  # Best-effort cleanup
+
         # Find all manifests that match this grid config (by snapshot path)
         matching_manifests = []
         # Resolve input path to absolute for comparison
@@ -1573,13 +1579,8 @@ class GridManifestManager:
                     manifest = json.load(f)
                 # Match by snapshot path (resume requires using snapshot path)
                 snapshot_path = manifest.get("grid_config_snapshot_path", "")
-                # Resolve $MAC_FAIRNESS_WORKSPACE for comparison
-                if snapshot_path.startswith("$MAC_FAIRNESS_WORKSPACE"):
-                    resolved_snapshot = snapshot_path.replace(
-                        "$MAC_FAIRNESS_WORKSPACE", str(self.project_root)
-                    )
-                else:
-                    resolved_snapshot = snapshot_path
+                # Resolve env var placeholders for comparison
+                resolved_snapshot = resolve_path(snapshot_path, self.project_root)
                 if config_path_resolved == resolved_snapshot:
                     matching_manifests.append((manifest_file, manifest))
             except json.JSONDecodeError as e:
