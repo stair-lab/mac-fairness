@@ -141,6 +141,16 @@ def signal_handler(signum: int, _frame) -> None:
     Treats shutdown as a disaster scenario: exit immediately, rely on
     persistent storage (manifest, transcripts already saved) for recovery.
 
+    Uses os._exit() for truly immediate termination, bypassing Python's
+    cleanup (atexit, finally blocks, asyncio shutdown). This ensures a single
+    Ctrl+C is sufficient even when asyncio or vLLM cleanup is blocked.
+
+    Resource cleanup notes:
+    - GPU memory: Reclaimed by Linux kernel when process dies
+    - vLLM workers: Child processes receive SIGTERM when parent exits
+    - File handles: Closed automatically by OS
+    - Lock files: Left as empty files (harmless, reused on next run)
+
     Args:
         signum: Signal number
         _frame: Current stack frame (unused)
@@ -148,14 +158,18 @@ def signal_handler(signum: int, _frame) -> None:
     sig_name = signal.Signals(signum).name
     info_print(f"\n✗ Received {sig_name}, exiting immediately...", prefix=False)
     info_print("  (Completed transcripts saved, manifest preserved for resume)", prefix=False)
+    info_print("\nTo restore the cursor to its default visible state, run:", prefix=False)
+    info_print("tput cnorm", prefix=False)
 
     # Print resume command for grid jobs
     if _grid_resume_path:
         info_print(f"\nTo resume this grid job, run:", prefix=False)
         info_print(f"[ENV_VARS] python script/run_job.py {_grid_resume_path} --grid --resume", prefix=False)
 
-    # Exit immediately - no graceful shutdown, just stop
-    sys.exit(128 + signum)
+    # Force immediate exit - bypass all Python cleanup (atexit, finally, asyncio)
+    # This ensures single Ctrl+C works even when cleanup code is blocked
+    # Resources (GPU memory, child processes) are reclaimed by OS/kernel
+    os._exit(128 + signum)
 
 
 def run_grid_experiments(args: argparse.Namespace) -> int:
@@ -327,7 +341,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
         question_ids: Optional[Set[str]] = None
         old_task_manifest_path: Optional[Path] = None
         resume_config_path: Optional[str] = None  # Use existing config snapshot for resume
-        succeeded_questions: Optional[List[Dict[str, Any]]] = None  # Carry over for resume
+        succeeded_questions: Optional[Dict[str, Dict[str, Any]]] = None  # Carry over for resume
         if i in started_task_info:
             run_info = started_task_info[i]
             started_exp_name = run_info["experiment_name"]
@@ -387,21 +401,33 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             # Run experiment
             orchestrator = ConversationOrchestrator(config_to_use)
 
+            # Get skip_cleanup flag from grid manifest (computed at manifest creation)
+            # If True, next task uses same model - skip GPU unload to avoid reload overhead
+            skip_cleanup = grid_manifest_manager.get_task_skip_cleanup(manifest_path, i)
+
             # Pass existing_snapshot_path for resume (avoids creating duplicate snapshots)
             # Pass old_manifest_path for atomic create-then-delete
-            asyncio.run(orchestrator.run_job(
+            all_succeeded = asyncio.run(orchestrator.run_job(
                 question_ids=question_ids,
                 succeeded_questions=succeeded_questions,
                 existing_snapshot_path=resume_config_path,
                 old_manifest_path=old_task_manifest_path,
+                skip_cleanup=skip_cleanup,
             ))
 
-            successful += 1
-            grid_manifest_manager.mark_task_succeeded(manifest_path, i)
-            info_print(f"Task {config_num} completed successfully")
+            # Only mark grid task as succeeded if ALL questions succeeded
+            if all_succeeded:
+                successful += 1
+                grid_manifest_manager.mark_task_succeeded(manifest_path, i)
+                info_print(f"Task {config_num} completed successfully")
+            else:
+                # Some questions failed - leave status as "started" for resume
+                failed += 1
+                failed_configs.append((i, exp_name, "Some questions failed"))
+                info_print(f"Task {config_num} completed with failures (some questions did not succeed)")
 
         except Exception as e:
-            # Task failed - leave status as "started" so it can be resumed
+            # Task crashed - leave status as "started" so it can be resumed
             failed += 1
             error_msg = f"{type(e).__name__}: {e}"
             failed_configs.append((i, exp_name, error_msg))

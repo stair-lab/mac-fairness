@@ -216,14 +216,14 @@ class TranscriptManager:
 
         return transcript
 
-    def save_transcript(self, transcript: Dict[str, Any]) -> str:
-        """Save transcript to file.
+    def get_transcript_path(self, transcript: Dict[str, Any]) -> Path:
+        """Get the path where a transcript would be saved.
 
         Args:
             transcript: Complete transcript dictionary
 
         Returns:
-            Path to the saved transcript file
+            Path where the transcript would be saved
         """
         exp_root = os.environ.get(EXPERIMENT_ROOT_ENV, "experiment")
         exp_root_path = Path(exp_root)
@@ -233,13 +233,27 @@ class TranscriptManager:
         benchmark = transcript["experiment_metadata"]["benchmark_subcategory"]
         experiment = transcript["experiment_metadata"]["experiment_name"]
 
-        transcript_path = (
+        return (
             exp_root_path
             / benchmark
             / experiment
             / "transcript"
             / f"{transcript['transcript_id']}.json"
         )
+
+    def save_transcript(self, transcript: Dict[str, Any]) -> str:
+        """Save transcript to file.
+
+        Note: For atomic writes with manifest/index, use
+        BookkeepingManager.record_question_completion() instead.
+
+        Args:
+            transcript: Complete transcript dictionary
+
+        Returns:
+            Path to the saved transcript file
+        """
+        transcript_path = self.get_transcript_path(transcript)
 
         # Create directory if it doesn't exist
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,23 +268,16 @@ class TranscriptManager:
             )
         return str(transcript_path)
 
-    def get_index_path(self, benchmark: str) -> Path:
-        """Get the index file path for a benchmark.
+    def get_index_path(self, experiment_name: str) -> Path:
+        """Get the index file path for an experiment.
 
         Args:
-            benchmark: Benchmark subcategory name
+            experiment_name: Name of the experiment
 
         Returns:
-            Path to the appropriate index.jsonl file
+            Path to the experiment's index.jsonl file
         """
-        # Use separate index for dev benchmarks, production uses main index
-        # All are in bookkeeping/ directory
-        if benchmark == "dev_ollama":
-            return self.project_root / "bookkeeping" / "dev_ollama_index.jsonl"
-        elif benchmark == "dev_vllm":
-            return self.project_root / "bookkeeping" / "dev_vllm_index.jsonl"
-        else:
-            return self.project_root / "bookkeeping" / "index.jsonl"
+        return self.project_root / "bookkeeping" / f"{experiment_name}_index.jsonl"
 
     def build_index_entry(
         self,
@@ -287,14 +294,13 @@ class TranscriptManager:
 
         Returns:
             Index entry dictionary ready to be appended to index.jsonl
+
+        Note:
+            Most config details are omitted since they're stored in the config
+            snapshot referenced by config_snapshot_path.
         """
         benchmark = config["experiment_metadata"]["benchmark_subcategory"]
         exp_meta = config["experiment_metadata"]
-        conversation_config = config["conversation_config"]
-        identity_config = config["identity_reveal_config"]
-        prompt_template_config = config.get("prompt_template_config", {})
-        model_defs = config["model_definitions"]
-        agent_defs = config["agent_definitions"]
         summary = transcript["conversation_summary"]
 
         # Build transcript_path using display_path format
@@ -319,30 +325,12 @@ class TranscriptManager:
         ]
 
         return {
-            "transcript_id": transcript["transcript_id"],
-            "experiment_name": exp_meta["experiment_name"],
-            "benchmark_subcategory": benchmark,
             "question_id": question["question_id"],
             "job_task_id": transcript["experiment_metadata"]["job_task_id"],
-            "submission_timestamp": transcript["experiment_metadata"][
-                "submission_timestamp"
-            ],
-            "execution_timestamp": transcript["experiment_metadata"][
-                "execution_timestamp"
-            ],
-            "transcript_path": transcript_display,
             "config_snapshot_path": config_snapshot_display,
-            "protocol_version": exp_meta["schema_version"],
-            "routing_strategy": conversation_config["routing_strategy"],
-            "identity_reveal_config": identity_config,
-            "prompt_template_config": prompt_template_config,
-            "model_definitions": model_defs,
-            "n_agents": len(agent_defs),
-            "agent_definitions": agent_defs,
+            "transcript_path": transcript_display,
             "status": summary["status"],
-            "consensus_reached": summary["consensus_reached"],
             "total_rounds_completed": summary["total_rounds"],
-            "retry_attempts": summary["retry_statistics"]["total_retry_attempts"],
             "fatal_error": self._strip_error_details(summary.get("error_info")),
         }
 

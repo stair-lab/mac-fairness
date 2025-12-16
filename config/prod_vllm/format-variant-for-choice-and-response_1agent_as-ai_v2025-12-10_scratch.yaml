@@ -11,8 +11,6 @@ _grid:
 
   # Sweep parameters: all combinations will be generated and run
   sweep:
-    experiment_metadata.experiment_name:
-      - format-variant-for-choice-and-response_1agent_as-ai_v2025-12-10
     experiment_metadata.benchmark_subcategory:
       - bbq_race
     prompt_template_config.for_participant.choice_display_format:
@@ -41,13 +39,11 @@ _grid:
 
   # Zip: paired values that change together (not Cartesian product)
   zip:
-    model_definitions:
-      - model_definitions.llm_0.model_path: google/gemma-2-27b-it
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
-      # - model_definitions.llm_0.model_path: meta-llama/Llama-3.3-70B-Instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      # - model_definitions.llm_0.model_path: meta-llama/Llama-3.1-70B-Instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+    custom_grouping: # name does not matter
+      # --> Prefix timestamp to exp name, e.g., 20251216T0230Z
+      - experiment_metadata.experiment_name: _format-variant_llama31-70b_1agent_as-ai_v2025-12-10
+        model_definitions.llm_0.model_path: meta-llama/Llama-3.1-70B-Instruct
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
 
 # Base experiment configuration (used as template for all combinations)
 experiment_metadata:

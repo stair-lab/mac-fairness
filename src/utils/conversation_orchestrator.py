@@ -111,13 +111,24 @@ class ConversationOrchestrator:
 
         info_print(f"Router initialized: {routing_strategy}")
 
-    async def _cleanup_agents(self) -> None:
-        """Cleanup all agent resources (sessions, engines, GPU memory)."""
+    async def _cleanup_agents(self, skip_engine_cleanup: bool = False) -> None:
+        """Cleanup agent resources.
+
+        Args:
+            skip_engine_cleanup: If True, skip GPU/engine cleanup (keep model loaded).
+                Used when next task uses the same model to avoid reload overhead.
+        """
         # Get unique agent classes to call class-level cleanup
         agent_classes = set(type(agent) for agent in self.agents.values())
         for agent_class in agent_classes:
-            if hasattr(agent_class, "cleanup_all_async"):
-                await agent_class.cleanup_all_async()
+            if skip_engine_cleanup:
+                # Only stop engine (mark as stopped), don't unload from GPU
+                if hasattr(agent_class, "stop_engine"):
+                    await agent_class.stop_engine()
+            else:
+                # Full cleanup: stop engine and unload from GPU
+                if hasattr(agent_class, "cleanup_all_async"):
+                    await agent_class.cleanup_all_async()
 
     def _extract_transcript_stats(
         self, transcript: Dict[str, Any], question_id: str
@@ -245,10 +256,11 @@ class ConversationOrchestrator:
     async def run_job(
         self,
         question_ids: Optional[Set[str]] = None,
-        succeeded_questions: Optional[List[Dict[str, Any]]] = None,
+        succeeded_questions: Optional[Dict[str, Dict[str, Any]]] = None,
         existing_snapshot_path: Optional[str] = None,
         old_manifest_path: Optional[Path] = None,
-    ):
+        skip_cleanup: bool = False,
+    ) -> bool:
         """Run job with async parallel conversation processing.
 
         Runs all conversations in parallel using AsyncConversationRunner.
@@ -256,13 +268,20 @@ class ConversationOrchestrator:
 
         Args:
             question_ids: Optional set of question IDs to process (for resume)
-            succeeded_questions: Optional list of question entries that already succeeded
-                (carried over from previous manifest on resume). These will be preserved
-                in the new manifest to ensure correct progress tracking.
+            succeeded_questions: Optional dict mapping question_id -> question entry for ALL
+                questions from previous manifest (for resume). Contains both succeeded and null
+                questions. Reuses transcript_id for all questions so orphan transcripts are
+                overwritten on retry instead of creating new files.
             existing_snapshot_path: Optional path to existing config snapshot (for resume).
                 If provided, reuses this snapshot instead of creating a new one.
             old_manifest_path: Optional path to old task manifest to delete after new
                 manifest is created (for atomic resume). Ensures create-then-delete order.
+            skip_cleanup: If True, skip GPU/engine cleanup after job completes.
+                Used when the next task in a grid uses the same model, avoiding
+                unnecessary unload/reload cycles. Agents are still cleaned up.
+
+        Returns:
+            True if all questions succeeded, False otherwise.
         """
         start_time = datetime.now(timezone.utc)
 
@@ -279,23 +298,33 @@ class ConversationOrchestrator:
         self.initialize_router()
 
         try:
-            await self._run_job_inner(
+            all_succeeded = await self._run_job_inner(
                 question_ids=question_ids,
                 succeeded_questions=succeeded_questions,
                 start_time=start_time,
                 old_manifest_path=old_manifest_path,
             )
         finally:
-            await self._cleanup_agents()
+            await self._cleanup_agents(skip_engine_cleanup=skip_cleanup)
+
+        # Clean up lock file after task completes (regardless of question success/failure)
+        experiment_name = self.config["experiment_metadata"]["experiment_name"]
+        self.bookkeeping.cleanup_lock_file(experiment_name)
+
+        return all_succeeded
 
     async def _run_job_inner(
         self,
         question_ids: Optional[Set[str]],
-        succeeded_questions: Optional[List[Dict[str, Any]]],
+        succeeded_questions: Optional[Dict[str, Dict[str, Any]]],
         start_time: datetime,
         old_manifest_path: Optional[Path] = None,
-    ):
-        """Inner job logic wrapped for cleanup."""
+    ) -> bool:
+        """Inner job logic wrapped for cleanup.
+
+        Returns:
+            True if all questions succeeded, False otherwise.
+        """
         from src.utils.request_scheduler import RequestScheduler
         from src.agent.async_vllm_agent import AsyncVLLMAgent
 
@@ -318,13 +347,14 @@ class ConversationOrchestrator:
 
         # Save task manifest (pre-registration of planned questions for recovery)
         # Each question starts with status=null, marked "succeeded" when complete
-        # For resume, succeeded_questions carries over questions that already succeeded
-        self.manifest_path = self.bookkeeping.save_task_manifest(
+        # For resume, previous_questions carries over all questions (preserves transcript_id)
+        # Returns (manifest_path, question_to_transcript_id_map)
+        self.manifest_path, question_to_transcript_id = self.bookkeeping.save_task_manifest(
             config=self.config,
             questions=all_questions,  # Always save ALL questions for correct total count
             submission_timestamp=self.submission_timestamp,
             config_snapshot_path=self.snapshot_path,
-            succeeded_questions=succeeded_questions,
+            previous_questions=succeeded_questions,
         )
 
         # Delete old manifest AFTER new one is created (atomic create-then-delete)
@@ -334,7 +364,12 @@ class ConversationOrchestrator:
 
         # Calculate total questions (for correct live status display)
         # On resume: total = carried-over succeeded + questions being processed now
-        num_succeeded_carry_over = len(succeeded_questions) if succeeded_questions else 0
+        # succeeded_questions contains ALL questions from previous manifest, count only succeeded ones
+        num_succeeded_carry_over = 0
+        if succeeded_questions:
+            num_succeeded_carry_over = sum(
+                1 for q in succeeded_questions.values() if q.get("status") == "succeeded"
+            )
         questions_total = num_succeeded_carry_over + len(questions_to_process)
 
         # Initialize streaming task summary (updates in real-time as transcripts complete)
@@ -366,6 +401,7 @@ class ConversationOrchestrator:
             snapshot_path=self.snapshot_path,
             submission_timestamp=self.submission_timestamp,
             effective_backend_config=effective_backend_config,
+            question_to_transcript_id=question_to_transcript_id,
         )
         # Print per-model scheduling info
         model_info = ", ".join(
@@ -387,9 +423,6 @@ class ConversationOrchestrator:
             question_id = transcript["experiment_metadata"]["question_id"]
             question = questions_to_process[question_idx]
 
-            # Save transcript immediately (can be lost on interrupt, recoverable)
-            self.transcript_manager.save_transcript(transcript)
-
             # Collect statistics
             transcript_stat = self._extract_transcript_stats(transcript, question_id)
             per_transcript_stats.append(transcript_stat)
@@ -402,23 +435,27 @@ class ConversationOrchestrator:
                 if error_info:
                     error_summary.append({"question_id": question_id, "error": error_info})
 
-            # Update streaming summary (writes to disk)
-            streaming_summary.record_completion(transcript_stat, error_info)
-
-            # Atomically record completion in both manifest and index
-            # This ensures consistency: either both are updated or neither
-            benchmark = self.config["experiment_metadata"]["benchmark_subcategory"]
-            index_path = self.transcript_manager.get_index_path(benchmark)
+            # Atomically record completion: transcript (outside lock), manifest + index (under lock)
+            # If interrupted, either all succeed or question will be retried on resume
+            experiment_name = self.config["experiment_metadata"]["experiment_name"]
+            index_path = self.transcript_manager.get_index_path(experiment_name)
             index_entry = self.transcript_manager.build_index_entry(
                 transcript, question, self.config
             )
+            transcript_path = self.transcript_manager.get_transcript_path(transcript)
             self.bookkeeping.record_question_completion(
                 manifest_path=self.manifest_path,
                 question_id=question_id,
                 succeeded=(status == "succeeded"),
                 index_path=index_path,
                 index_entry=index_entry,
+                transcript_path=transcript_path,
+                transcript=transcript,
             )
+
+            # Update streaming summary AFTER successful persistence
+            # This ensures counts match what's actually in manifest/index
+            streaming_summary.record_completion(transcript_stat, error_info)
 
             # Only print progress if live status display is not enabled
             if not is_live_status_enabled():
@@ -456,8 +493,11 @@ class ConversationOrchestrator:
             else None,
         )
 
-        # Delete manifest if all questions succeeded, otherwise keep for resume
-        manifest_deleted = self.bookkeeping.delete_manifest_if_complete(self.manifest_path)
+        # Check if all questions succeeded - this determines whether task counts as success
+        # for grid manifest, and whether to delete the task manifest
+        all_succeeded = self.bookkeeping.check_manifest_complete(self.manifest_path)
+        if all_succeeded:
+            self.bookkeeping.delete_manifest(self.manifest_path)
 
         # Print summary
         print(f"\n{'=' * 60}")
@@ -535,10 +575,12 @@ class ConversationOrchestrator:
                 f"peak concurrent: {concurrency.get('peak_concurrent_requests', 0)}, "
                 f"avg latency: {timing.get('avg_latency_seconds', 0):.3f}s"
             )
-        if not manifest_deleted:
+        if not all_succeeded:
             info_print("Some questions failed. To resume via grid:")
             info_print("[ENV_VARS] python script/run_job.py <grid_config_snapshot> --grid --resume")
         print()  # Trailing newline
+
+        return all_succeeded
 
 
 def main():

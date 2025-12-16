@@ -128,7 +128,7 @@ To maximize GPU utilization, the scheduler decouples GPU execution from file I/O
 
 ### Why This Matters
 
-When multiple processes write to shared files (e.g., `index.jsonl`), they contend for the same `fcntl.flock` exclusive lock. Without decoupling:
+When multiple processes write to shared files (e.g., `{experiment_name}_index.jsonl`), they contend for the same `fcntl.flock` exclusive lock. Without decoupling:
 
 1. Process A holds semaphore, finishes GPU work, waits for file lock
 2. While waiting, semaphore slot is wasted

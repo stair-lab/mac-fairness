@@ -843,9 +843,24 @@ class AsyncVLLMAgent(BaseAgent):
 
     @classmethod
     def _cleanup_engines(cls) -> None:
-        """Internal: clear engine references and free memory."""
+        """Internal: clear engine references and free memory.
+
+        For tensor_parallel > 1, vLLM spawns worker processes that need explicit
+        shutdown. We call engine.shutdown() to gracefully terminate these processes
+        before clearing references.
+        """
         if cls._engines:
             info_print(f"Releasing {len(cls._engines)} engine(s)...")
+
+            # Shutdown each engine gracefully (important for tensor_parallel > 1)
+            for model_path, engine in cls._engines.items():
+                try:
+                    if hasattr(engine, "shutdown"):
+                        engine.shutdown()
+                except Exception as e:
+                    # Ignore shutdown errors - process may already be dead from Ctrl+C
+                    debug_print(f"Engine shutdown for {model_path}: {e}")
+
             cls._engines.clear()
             cls._engines_started.clear()
             cls._tokenizers.clear()

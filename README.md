@@ -86,8 +86,7 @@ $MAC_FAIRNESS_WORKSPACE/
 │   │   └── {benchmark_subcategory}/        # Organized by benchmark subcategory
 │   ├── grid_manifest/                      # Grid manifests (ephemeral, auto-deleted on success)
 │   │   └── {timestamp}_{pid}.json
-│   ├── dev_{backend}_index.jsonl           # Separate index for dev_{backend} pilot experiments, e.g., dev_vllm
-│   └── index.jsonl                         # Append-only index for production experiments
+│   └── {experiment_name}_index.jsonl       # Per-experiment append-only index (persistent)
 │
 ├── config/                                 # Working configuration files (edit here)
 │   └── {benchmark_subcategory or custom}/  # Benchmark subcategory (e.g., bbq_race, discrim_eval_age) or exp variants
@@ -172,7 +171,7 @@ $MAC_FAIRNESS_WORKSPACE/
   - Snapshot saved at start of `run_job()` method (or reuses existing on resume)
 - Manages agent initialization and conversation orchestration
 - Saves full conversation transcripts to `experiment/{benchmark_subcategory}/{experiment_name}/transcript/`
-- Updates `bookkeeping/index.jsonl` with thread-safe file locking
+- Updates `bookkeeping/{experiment_name}_index.jsonl` with thread-safe file locking
 - Saves task summaries to `experiment/{benchmark_subcategory}/{experiment_name}/task_summary/`
 
 **`config/{benchmark_subcategory}/`**: Working configuration files (what we're actively editing)
@@ -183,7 +182,7 @@ $MAC_FAIRNESS_WORKSPACE/
 
 **`bookkeeping/`**: Runtime metadata and config snapshots (what has been submitted/run)
 
-- `index.jsonl`: Append-only transaction log with file locking for concurrent safety
+- `{experiment_name}_index.jsonl`: Per-experiment append-only index with file locking for concurrent safety
 - `config_snapshot/{benchmark_subcategory}/`: Immutable snapshots organized by benchmark subcategory
   - Each snapshot timestamped: `{experiment_name}_{TIMESTAMP}.yaml` (Zulu time format)
   - Multiple submissions of same experiment name get unique config snapshots via timestamps
@@ -501,23 +500,43 @@ For each task in a grid job:
 
 ### Artifact Lifecycle
 
-| Artifact                 | Location                                   | Lifecycle                      | Purpose                               |
-| ------------------------ | ------------------------------------------ | ------------------------------ | ------------------------------------- |
-| **Grid config snapshot** | `bookkeeping/_grid_config_snapshot/`       | Ephemeral (deleted on success) | Resume grid with identical parameters |
-| **Grid manifest**        | `bookkeeping/grid_manifest/`               | Ephemeral (deleted on success) | Track task-level progress             |
-| **Task config snapshot** | `bookkeeping/config_snapshot/{benchmark}/` | **Persistent**                 | Audit trail, reproducibility          |
-| **Task manifest**        | `experiment/.../task_manifest/`            | Ephemeral (deleted on success) | Track question-level progress         |
-| **Task summary**         | `experiment/.../task_summary/`             | **Persistent**                 | Execution statistics, results         |
-| **Transcripts**          | `experiment/.../transcript/`               | **Persistent**                 | Conversation data                     |
+| Artifact                 | Location                                       | Lifecycle                          | Purpose                               |
+| ------------------------ | ---------------------------------------------- | ---------------------------------- | ------------------------------------- |
+| **Grid config snapshot** | `bookkeeping/_grid_config_snapshot/`           | Ephemeral (deleted on grid success)| Resume grid with identical parameters |
+| **Grid manifest**        | `bookkeeping/grid_manifest/`                   | Ephemeral (deleted on grid success)| Track task-level progress             |
+| **Task config snapshot** | `bookkeeping/config_snapshot/{benchmark}/`     | **Persistent**                     | Audit trail, reproducibility          |
+| **Task manifest**        | `experiment/.../task_manifest/`                | Ephemeral (deleted on task success)| Track question-level progress         |
+| **Lock file**            | `bookkeeping/.{experiment_name}.completion.lock` | Ephemeral (deleted on task finish) | Per-experiment atomic writes        |
+| **Task summary**         | `experiment/.../task_summary/`                 | **Persistent**                     | Execution statistics, results         |
+| **Transcripts**          | `experiment/.../transcript/`                   | **Persistent**                     | Conversation data                     |
+| **Index**                | `bookkeeping/{experiment_name}_index.jsonl`    | **Persistent**                     | Per-experiment pointer index          |
 
 ### Task Manifests
 
 Task manifests track question processing status for interrupted run recovery:
 
-- Created at task start with all planned questions (status: `null`)
+- Created at task start with all planned questions (status: `null`, pre-assigned `transcript_id`)
 - Updated atomically as each question completes (status: `"succeeded"`)
 - **Deleted automatically** when all questions succeed
 - **Persists** if any questions have null status (for grid resume)
+
+Structure:
+
+```json
+{
+  "job_task_id": "12345_0",
+  "config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/config_snapshot/...",
+  "num_questions_planned": 100,
+  "num_questions_processed": 45,
+  "questions": {
+    "bbq_race_q001": { "status": "succeeded", "transcript_id": "a1b2c3d4-..." },
+    "bbq_race_q002": { "status": null, "transcript_id": "e5f6g7h8-..." }
+  },
+  "created_at": "2025-12-15T10:00:00.000Z"
+}
+```
+
+Questions are stored as a dict indexed by `question_id` for O(1) lookup. Each question has a pre-assigned `transcript_id` (UUID) that determines its transcript filename. On resume, the `transcript_id` is preserved for all questions (both succeeded and null), so retries overwrite orphan transcripts instead of creating new files.
 
 To resume, use `--grid --resume` with the grid config snapshot path (not the task manifest directly).
 
@@ -555,22 +574,36 @@ Each task summary (one per task) captures:
 
 ### Index System
 
-The index system uses JSONL for concurrent-safe appends:
+The index system uses per-experiment JSONL files for concurrent-safe appends:
 
-- `index.jsonl`: Append-only database (one record per transcript)
+- `{experiment_name}_index.jsonl`: Append-only index (one record per transcript)
 - File locking ensures multiple concurrent jobs can safely append
-- Dev experiments use separate indices (e.g., `dev_ollama_index.jsonl`, `dev_vllm_index.jsonl`)
+- Each experiment gets its own index file in `bookkeeping/`
 
-Each index record contains:
+Each index record is a lightweight pointer containing:
 
-- Identifiers (transcript_id, question_id, experiment_name, benchmark_subcategory, job_task_id)
-- Execution context (submission/execution timestamps, protocol_version)
-- Experimental configuration (routing_strategy, identity_reveal_config)
-- Full agent configurations for experimental condition filtering
-- Conversation outcomes (status, consensus_reached, retry_attempts)
-- Paths (transcript_path, config_snapshot_path) using `$MAC_FAIRNESS_WORKSPACE` placeholder
+```json
+{
+  "question_id": "bbq_race_34",
+  "job_task_id": "1911869_0",
+  "config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/config_snapshot/...",
+  "transcript_path": "$MAC_FAIRNESS_EXPERIMENT_ROOT/bbq_race/.../transcript/....json",
+  "status": "succeeded",
+  "total_rounds_completed": 1,
+  "fatal_error": null
+}
+```
 
-The inclusion of full agent configurations enables high-level analysis directly from the index without loading individual transcripts.
+**Data recovery paths:**
+
+| Information | Source |
+|-------------|--------|
+| Full config | Load `config_snapshot_path` (YAML) |
+| Experiment name | Index filename: `{experiment_name}_index.jsonl` |
+| Benchmark | `question_id` prefix (e.g., `bbq_race_34` → `bbq_race`) |
+| Transcript ID | `transcript_path` filename |
+| Timestamps | Load transcript JSON |
+| Conversation details | Load `transcript_path` (JSON) |
 
 ---
 

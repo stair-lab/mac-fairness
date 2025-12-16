@@ -604,29 +604,33 @@ class BookkeepingManager:
         questions: List[Dict[str, Any]],
         submission_timestamp: datetime,
         config_snapshot_path: str,
-        succeeded_questions: Optional[List[Dict[str, Any]]] = None,
-    ) -> Path:
+        previous_questions: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Tuple[Path, Dict[str, str]]:
         """Save a task manifest recording all planned questions for recovery.
 
         The manifest uses the same timestamp as the config_snapshot.
         One manifest per task run.
 
-        Each question has a status field:
-        - "succeeded": completed successfully
-        - null: not yet succeeded (not started, failed, partial, or interrupted)
+        Questions are stored as a dict indexed by question_id for O(1) lookup.
+        Each question entry has:
+        - status: "succeeded" or null
+        - transcript_id: pre-assigned UUID for deterministic transcript paths
 
         Args:
             config: Full configuration dictionary
             questions: List of questions to process (already sliced by range)
             submission_timestamp: Same timestamp used for config_snapshot
             config_snapshot_path: Path to the config snapshot (for reference)
-            succeeded_questions: Optional list of question entries that already succeeded
-                (carried over from previous manifest on resume). These preserve their
-                original index and "succeeded" status.
+            previous_questions: Optional dict of ALL question entries from previous manifest
+                (for resume). Contains both succeeded and null questions. Reuses transcript_id
+                for all questions to ensure orphan transcripts are overwritten on retry.
 
         Returns:
-            Absolute path to the saved manifest file
+            Tuple of (manifest_path, question_to_transcript_id_map)
+            question_to_transcript_id_map maps question_id -> transcript_id
         """
+        import uuid
+
         exp_root_path = self.get_experiment_root()
         exp_meta = config["experiment_metadata"]
         benchmark = exp_meta["benchmark_subcategory"]
@@ -642,47 +646,40 @@ class BookkeepingManager:
         job_task_id = get_current_job_task_id()
         manifest_path = manifest_dir / f"{timestamp_str}_{job_task_id}.json"
 
-        # Build question entries: combine succeeded (carry-over) with new (null status)
-        if succeeded_questions:
-            # Create a map of question_id to succeeded entry
-            succeeded_by_id = {q["question_id"]: q for q in succeeded_questions}
-            # Build combined list preserving succeeded status
-            question_entries = []
-            for i, q in enumerate(questions):
-                qid = q.get("question_id", f"q_{i}")
-                if qid in succeeded_by_id:
-                    # Carry over succeeded entry (preserve all fields)
-                    question_entries.append(succeeded_by_id[qid])
-                else:
-                    # New question with null status
-                    question_entries.append({
-                        "index": i,
-                        "question_id": qid,
-                        "status": None,
-                    })
-            num_succeeded = len(succeeded_questions)
-        else:
-            # All new questions start with null status
-            question_entries = [
-                {
-                    "index": i,
-                    "question_id": q.get("question_id", f"q_{i}"),
+        if previous_questions is None:
+            previous_questions = {}
+
+        # Build question entries as dict indexed by question_id
+        # Reuse transcript_id from previous manifest if available (for all questions)
+        questions_dict: Dict[str, Dict[str, Any]] = {}
+        question_to_transcript_id: Dict[str, str] = {}
+        num_succeeded = 0
+
+        for q in questions:
+            qid = q.get("question_id", f"q_{questions.index(q)}")
+            if qid in previous_questions:
+                # Reuse entry from previous manifest (preserves transcript_id)
+                # This works for both succeeded (carry over) and null (retry with same path)
+                questions_dict[qid] = previous_questions[qid]
+                question_to_transcript_id[qid] = previous_questions[qid]["transcript_id"]
+                if previous_questions[qid].get("status") == "succeeded":
+                    num_succeeded += 1
+            else:
+                # New question with null status and pre-assigned transcript_id
+                transcript_id = str(uuid.uuid4())
+                questions_dict[qid] = {
                     "status": None,
+                    "transcript_id": transcript_id,
                 }
-                for i, q in enumerate(questions)
-            ]
-            num_succeeded = 0
+                question_to_transcript_id[qid] = transcript_id
 
         # Build manifest content
         manifest = {
             "job_task_id": job_task_id,
-            "experiment_name": experiment,
-            "benchmark_subcategory": benchmark,
-            "submission_timestamp": format_timestamp(submission_timestamp),
             "config_snapshot_path": config_snapshot_path,
             "num_questions_planned": len(questions),
-            "num_questions_processed": num_succeeded,  # Start with carried-over succeeded count
-            "questions": question_entries,
+            "num_questions_processed": num_succeeded,
+            "questions": questions_dict,
             "created_at": format_timestamp(datetime.now(timezone.utc)),
         }
 
@@ -699,43 +696,7 @@ class BookkeepingManager:
                 f"Task manifest saved: {display_path(manifest_path, self.project_root)}"
             )
 
-        return manifest_path
-
-    def mark_question_processed(
-        self, manifest_path: Path, question_id: str, succeeded: bool
-    ) -> None:
-        """Mark a question as processed in the manifest.
-
-        Updates the question status and increments num_questions_processed.
-        Called after transcript and bookkeeping are finished for a question.
-
-        Args:
-            manifest_path: Absolute path to the manifest file
-            question_id: The question_id to mark
-            succeeded: True if the question succeeded, False otherwise
-        """
-        if not manifest_path.exists():
-            return
-
-        try:
-            with open(manifest_path, "r") as f:
-                manifest = json.load(f)
-
-            # Find and update the question status
-            for q in manifest.get("questions", []):
-                if q.get("question_id") == question_id:
-                    q["status"] = "succeeded" if succeeded else None
-                    break
-
-            # Increment processed count
-            manifest["num_questions_processed"] = (
-                manifest.get("num_questions_processed", 0) + 1
-            )
-
-            with open(manifest_path, "w") as f:
-                json.dump(manifest, f, indent=2)
-        except (json.JSONDecodeError, OSError) as e:
-            info_print(f"Warning: Could not update manifest: {e}")
+        return manifest_path, question_to_transcript_id
 
     def record_question_completion(
         self,
@@ -744,46 +705,69 @@ class BookkeepingManager:
         succeeded: bool,
         index_path: Path,
         index_entry: Dict[str, Any],
+        transcript_path: Path,
+        transcript: Dict[str, Any],
     ) -> None:
-        """Atomically record question completion in both manifest and index.
+        """Record question completion: manifest and index atomically, transcript separately.
 
-        This method ensures that either BOTH the manifest update AND index append
-        succeed together, or neither does. This prevents inconsistencies between
-        the two sources of truth when interrupted (e.g., by Ctrl+C).
+        Design rationale:
+        - Manifest + index are the source of truth, must stay in sync
+        - Transcript is large and slow to write, kept outside lock for performance
+        - Orphan transcripts (transcript exists but manifest says null) are harmless:
+          on resume, question is re-run and transcript is overwritten
 
-        The operation order within the lock is:
-        1. Update job manifest (mark question as succeeded/failed)
-        2. Append to index.jsonl
+        Operation order:
+        1. Save transcript (outside lock - fast parallel writes)
+        2. Under lock: update manifest + append to index (atomic)
+
+        If interrupted:
+        - Before step 1: no transcript, manifest null -> retry
+        - After step 1, before step 2: orphan transcript, manifest null -> retry (overwrites)
+        - After step 2: all consistent
 
         Raises:
             ManifestParseError: If manifest cannot be parsed
-            ManifestWriteError: If manifest or index cannot be written
+            ManifestWriteError: If any write operation fails
 
         Args:
-            manifest_path: Absolute path to the job manifest file
+            manifest_path: Absolute path to the task manifest file
             question_id: The question_id to mark
             succeeded: True if the question succeeded, False otherwise
             index_path: Absolute path to the index.jsonl file
             index_entry: The index entry dictionary to append
+            transcript_path: Absolute path to save the transcript
+            transcript: The transcript dictionary to save
         """
-        # Use a dedicated lock file for atomic completion
-        # This ensures manifest update and index append are atomic together
-        lock_path = self.project_root / "bookkeeping" / ".completion.lock"
+        # Step 1: Save transcript OUTSIDE lock (performance: large file, parallel writes OK)
+        # Orphan transcripts are harmless - overwritten on retry
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_temp = transcript_path.with_suffix(".json.tmp")
+        try:
+            with open(transcript_temp, "w") as f:
+                json.dump(transcript, f, indent=2)
+            transcript_temp.rename(transcript_path)
+        except OSError as e:
+            if transcript_temp.exists():
+                transcript_temp.unlink(missing_ok=True)
+            raise ManifestWriteError(
+                f"Failed to write transcript {transcript_path}: {e}"
+            ) from e
+
+        # Step 2: Update manifest + index UNDER lock (must stay in sync)
+        experiment_name = index_path.stem.replace("_index", "")
+        lock_path = self.project_root / "bookkeeping" / f".{experiment_name}.completion.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create lock file if it doesn't exist
         if not lock_path.exists():
             lock_path.touch()
 
-        # Create index file if it doesn't exist
         if not index_path.exists():
             index_path.touch()
 
-        # Acquire exclusive lock (blocking - waits for other processes)
         with open(lock_path, "r") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
-                # Step 1: Update manifest using atomic write (write to temp, then rename)
+                # Update manifest (questions stored as dict indexed by question_id)
                 if manifest_path.exists():
                     try:
                         with open(manifest_path, "r") as f:
@@ -793,33 +777,28 @@ class BookkeepingManager:
                             f"Failed to parse manifest {manifest_path}: {e}"
                         ) from e
 
-                    # Find and update the question status
-                    for q in manifest.get("questions", []):
-                        if q.get("question_id") == question_id:
-                            q["status"] = "succeeded" if succeeded else None
-                            break
+                    # Update question status (O(1) lookup with dict)
+                    questions = manifest.get("questions", {})
+                    if question_id in questions:
+                        questions[question_id]["status"] = "succeeded" if succeeded else None
 
-                    # Increment processed count
                     manifest["num_questions_processed"] = (
                         manifest.get("num_questions_processed", 0) + 1
                     )
 
-                    # Atomic write: write to temp file, then rename
-                    # This ensures manifest is never left in a corrupted state on Ctrl+C
                     temp_path = manifest_path.with_suffix(".json.tmp")
                     try:
                         with open(temp_path, "w") as f:
                             json.dump(manifest, f, indent=2)
                         temp_path.rename(manifest_path)
                     except OSError as e:
-                        # Clean up temp file if rename failed
                         if temp_path.exists():
                             temp_path.unlink(missing_ok=True)
                         raise ManifestWriteError(
                             f"Failed to write manifest {manifest_path}: {e}"
                         ) from e
 
-                # Step 2: Append to index
+                # Append to index
                 try:
                     with open(index_path, "a") as f:
                         f.write(json.dumps(index_entry) + "\n")
@@ -847,37 +826,58 @@ class BookkeepingManager:
             with open(manifest_path, "r") as f:
                 manifest = json.load(f)
 
-            questions = manifest.get("questions", [])
-            return all(q.get("status") == "succeeded" for q in questions)
+            # Questions stored as dict indexed by question_id
+            questions = manifest.get("questions", {})
+            return all(q.get("status") == "succeeded" for q in questions.values())
         except (json.JSONDecodeError, OSError):
             return False
 
-    def delete_manifest_if_complete(self, manifest_path: Path) -> bool:
-        """Delete manifest if all questions succeeded.
+    def delete_manifest(self, manifest_path: Path) -> bool:
+        """Delete a task manifest file.
+
+        Called after all questions succeeded. The caller is responsible for
+        checking completion via check_manifest_complete() before calling this.
 
         Args:
             manifest_path: Absolute path to the manifest file
 
         Returns:
-            True if manifest was deleted (all complete), False otherwise
+            True if manifest was deleted, False on error
         """
-        if self.check_manifest_complete(manifest_path):
-            try:
-                manifest_path.unlink(missing_ok=True)
+        try:
+            if manifest_path.exists():
+                manifest_path.unlink()
                 info_print(
                     f"Task manifest deleted (all succeeded): {display_path(manifest_path, self.project_root)}"
                 )
                 return True
-            except OSError:
-                pass
+        except OSError:
+            pass
         return False
+
+    def cleanup_lock_file(self, experiment_name: str) -> None:
+        """Remove the per-experiment lock file after task completion.
+
+        Called when a task finishes processing (regardless of question success/failure).
+        Lock files are only needed during active writes; cleaning them up keeps
+        the bookkeeping directory tidy.
+
+        Args:
+            experiment_name: Name of the experiment (used to derive lock file path)
+        """
+        lock_path = self.project_root / "bookkeeping" / f".{experiment_name}.completion.lock"
+        try:
+            if lock_path.exists():
+                lock_path.unlink()
+        except OSError:
+            pass  # Non-fatal: lock file cleanup is best-effort
 
     def find_task_manifest_and_get_null_questions(
         self,
         experiment_name: str,
         benchmark_subcategory: str,
         expected_config: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Tuple[Path, List[str], str, List[Dict[str, Any]]]]:
+    ) -> Optional[Tuple[Path, List[str], str, Dict[str, Dict[str, Any]]]]:
         """Find a task manifest for an experiment and get null question IDs.
 
         Used for resuming interrupted runs: finds questions that didn't succeed
@@ -893,12 +893,13 @@ class BookkeepingManager:
                 may share the same experiment_name but have different parameters).
 
         Returns:
-            Tuple of (manifest_path, null_question_ids, config_snapshot_path, succeeded_questions)
+            Tuple of (manifest_path, null_question_ids, config_snapshot_path, all_questions)
             or None if no manifest found.
             null_question_ids are questions with status != "succeeded".
             config_snapshot_path is the path to the config snapshot used for this job.
-            succeeded_questions is a list of question entries that already succeeded
-            (to be carried over when creating a new manifest for resume).
+            all_questions is a dict mapping question_id -> question entry for ALL questions
+            (both succeeded and null). This preserves transcript_id for null questions so
+            retries overwrite orphan transcripts instead of creating new files.
         """
         exp_root_path = self.get_experiment_root()
         manifest_dir = exp_root_path / benchmark_subcategory / experiment_name / "task_manifest"
@@ -931,18 +932,18 @@ class BookkeepingManager:
                 ):
                     continue  # Try next manifest
 
-            # Found a valid manifest - extract null question IDs and succeeded questions
-            null_question_ids = []
-            succeeded_questions = []
-            for q in manifest.get("questions", []):
-                if q.get("status") == "succeeded":
-                    # Preserve succeeded question entries for carry-over
-                    succeeded_questions.append(q)
-                else:
-                    qid = q.get("question_id", f"q_{q.get('index', '?')}")
+            # Found a valid manifest - extract null question IDs and all question entries
+            # Questions are stored as dict indexed by question_id
+            # Return ALL entries (both succeeded and null) to preserve transcript_id
+            # for null questions, so retries overwrite orphan transcripts
+            null_question_ids: List[str] = []
+            questions = manifest.get("questions", {})
+            for qid, q_entry in questions.items():
+                if q_entry.get("status") != "succeeded":
                     null_question_ids.append(qid)
 
-            return manifest_path, null_question_ids, config_snapshot_path, succeeded_questions
+            # Return entire questions dict to preserve transcript_id for all questions
+            return manifest_path, null_question_ids, config_snapshot_path, questions
 
         # No matching manifest found
         return None
@@ -1236,6 +1237,31 @@ class GridManifestManager:
         # Return path with $MAC_FAIRNESS_WORKSPACE prefix for portability
         return f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/_grid_config_snapshot/{snapshot_filename}"
 
+    def _get_model_signature(self, config: Dict[str, Any]) -> Optional[str]:
+        """Extract a signature representing the GPU resources used by a config.
+
+        Used to determine if consecutive tasks can reuse the same loaded model.
+        Returns a string that uniquely identifies the model configuration, or None
+        if no vLLM models are used.
+
+        Args:
+            config: Full experiment configuration
+
+        Returns:
+            Signature string (sorted model paths joined), or None if no vLLM backend
+        """
+        model_defs = config.get("model_definitions", {})
+        vllm_paths = []
+        for model_def in model_defs.values():
+            if model_def.get("backend") == "vllm":
+                model_path = model_def.get("model_path")
+                if model_path:
+                    vllm_paths.append(model_path)
+        if not vllm_paths:
+            return None
+        # Sort for consistent comparison
+        return "|".join(sorted(vllm_paths))
+
     def save_grid_manifest(
         self,
         grid_config_path: str,
@@ -1277,6 +1303,10 @@ class GridManifestManager:
         if succeeded_task_info is None:
             succeeded_task_info = {}
 
+        # Pre-compute model signatures for skip_cleanup optimization
+        # skip_cleanup=True means the next task uses the same GPU model, so don't unload
+        model_signatures = [self._get_model_signature(config) for config, _ in expanded_configs]
+
         # Build experiment run entries
         tasks = []
         for i, (config, grid_sweep_specs) in enumerate(expanded_configs):
@@ -1284,6 +1314,16 @@ class GridManifestManager:
                 # Reuse the full run entry from the old manifest (preserves all info)
                 tasks.append(succeeded_task_info[i])
             else:
+                # Determine if we can skip GPU cleanup for this task
+                # Skip cleanup if next task uses the same model (avoids unload/reload cycle)
+                current_sig = model_signatures[i]
+                next_sig = model_signatures[i + 1] if i + 1 < len(model_signatures) else None
+                skip_cleanup = (
+                    current_sig is not None
+                    and next_sig is not None
+                    and current_sig == next_sig
+                )
+
                 # New run entry
                 exp_meta = config.get("experiment_metadata", {})
                 tasks.append({
@@ -1291,6 +1331,7 @@ class GridManifestManager:
                     "experiment_name": exp_meta.get("experiment_name", "unknown"),
                     "benchmark_subcategory": exp_meta.get("benchmark_subcategory", "unknown"),
                     "grid_sweep_specs": grid_sweep_specs,
+                    "skip_cleanup": skip_cleanup,
                     "status": None,
                     "started_at": None,
                     "completed_at": None,
@@ -1570,7 +1611,7 @@ class GridManifestManager:
             for tasks with status="succeeded" (to preserve all info on resume).
         """
         pending: List[int] = []
-        started_task_info: Dict[int, Dict[str, str]] = {}
+        started_task_info: Dict[int, Dict[str, Any]] = {}
         succeeded_task_info: Dict[int, Dict[str, Any]] = {}
         for task in manifest.get("tasks", []):
             status = task.get("status")
@@ -1585,12 +1626,33 @@ class GridManifestManager:
                     started_task_info[task_id] = {
                         "experiment_name": task.get("experiment_name", ""),
                         "benchmark_subcategory": task.get("benchmark_subcategory", ""),
+                        "skip_cleanup": task.get("skip_cleanup", False),
                     }
         return pending, started_task_info, succeeded_task_info
 
+    def get_task_skip_cleanup(self, manifest_path: Path, task_id: int) -> bool:
+        """Get the skip_cleanup flag for a task from the manifest.
+
+        Args:
+            manifest_path: Path to the grid manifest file
+            task_id: ID of the task
+
+        Returns:
+            True if cleanup should be skipped (next task uses same model), False otherwise
+        """
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+            tasks = manifest.get("tasks", [])
+            if 0 <= task_id < len(tasks):
+                return tasks[task_id].get("skip_cleanup", False)
+        except (json.JSONDecodeError, OSError):
+            pass
+        return False
+
     def load_manifest_for_resume(
         self, grid_config_path: str
-    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, str]], Dict[int, Dict[str, Any]], Path]]:
+    ) -> Optional[Tuple[List[int], Dict[int, Dict[str, Any]], Dict[int, Dict[str, Any]], Path]]:
         """Load manifest for resume WITHOUT deleting it.
 
         Returns the manifest path so the caller can delete it AFTER creating

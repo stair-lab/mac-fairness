@@ -402,6 +402,7 @@ class RequestScheduler:
         snapshot_path: str,
         submission_timestamp: datetime,
         effective_backend_config: Optional[Dict[str, Dict[str, Any]]] = None,
+        question_to_transcript_id: Optional[Dict[str, str]] = None,
     ):
         """Initialize the request scheduler.
 
@@ -416,8 +417,12 @@ class RequestScheduler:
             effective_backend_config: Optional dict of effective config per model
                 keyed by model_path (includes auto-calculated values like max_num_seqs
                 from vLLM based on actual KV cache availability)
+            question_to_transcript_id: Optional dict mapping question_id -> pre-assigned
+                transcript_id from the task manifest. If provided, conversations use these
+                IDs instead of generating new UUIDs.
         """
         self.effective_backend_config = effective_backend_config or {}
+        self.question_to_transcript_id = question_to_transcript_id or {}
         self.agents = agents
         self.router = router
         self.prompt_builder = prompt_builder
@@ -617,12 +622,28 @@ class RequestScheduler:
     def _initialize_conversation(
         self, conversation_id: int, question: Dict[str, Any]
     ) -> None:
-        """Initialize a new conversation and create its round 0 requests."""
-        conv_state = ConversationState(
-            conversation_id=conversation_id,
-            question=question,
-            token_stats=ConversationTokenStats(),
-        )
+        """Initialize a new conversation and create its round 0 requests.
+
+        Uses pre-assigned transcript_id from task manifest if available,
+        otherwise generates a new UUID.
+        """
+        # Look up pre-assigned transcript_id from task manifest
+        question_id = question.get("question_id", "")
+        pre_assigned_id = self.question_to_transcript_id.get(question_id)
+
+        if pre_assigned_id:
+            conv_state = ConversationState(
+                conversation_id=conversation_id,
+                question=question,
+                token_stats=ConversationTokenStats(),
+                transcript_id=pre_assigned_id,
+            )
+        else:
+            conv_state = ConversationState(
+                conversation_id=conversation_id,
+                question=question,
+                token_stats=ConversationTokenStats(),
+            )
         self.conversation_states[conversation_id] = conv_state
 
         # Create requests for round 0
