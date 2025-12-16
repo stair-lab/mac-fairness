@@ -803,6 +803,15 @@ class AsyncVLLMAgent(BaseAgent):
 
         except (VLLMBatchError, VLLMOOMError):
             raise
+        except FileNotFoundError as e:
+            # FileNotFoundError typically indicates vLLM's IPC socket/pipe was lost
+            # (e.g., worker process crashed, tensor_parallel communication failure)
+            raise VLLMBatchError(
+                message=f"vLLM IPC error (worker may have crashed): {e}",
+                batch_size=1,
+                request_ids=[request_id],
+                original_error=e,
+            )
         except Exception as e:
             error_msg = str(e).lower()
             if "out of memory" in error_msg or "oom" in error_msg:

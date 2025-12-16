@@ -410,3 +410,51 @@ Enable with `MAC_FAIRNESS_LIVE_STATUS=1` to see real-time pool status:
 This helps diagnose bottlenecks and verify the scheduler is behaving as expected.
 
 > **Note**: Use `tput cnorm`, if needed, to show cursor in terminal after exp with live status concludes.
+
+### Live Status vs Persistent Storage Timing
+
+The live status "Progress" count may be significantly ahead of the number of transcripts persisted to disk. This is by design:
+
+```python
+# In _finalize_conversation():
+
+# Step 1: Append to in-memory list (IMMEDIATE - no await)
+self.completed_transcripts.append(transcript)
+
+# Step 2: Run blocking I/O in thread pool (AWAIT - may take time)
+await asyncio.to_thread(
+    progress_callback,
+    len(self.completed_transcripts),
+    self.total_conversations,
+    conv_state.conversation_id,
+    transcript,
+)
+```
+
+**Key timing detail**: `completed_transcripts.append()` happens BEFORE the `await asyncio.to_thread()`. The live status display polls `len(self.completed_transcripts)`, which reflects completions immediately.
+
+**Why a gap appears**: Each coroutine that reaches `_finalize_conversation()`:
+
+1. Instantly increments the completed count (no await)
+2. Then awaits its I/O thread to finish
+
+If GPU is faster than disk I/O (common with fast GPUs and slow storage), many coroutines will be simultaneously awaiting their `to_thread()` calls. The gap represents:
+
+```text
+Gap = coroutines that have appended to completed_transcripts
+    - coroutines whose I/O has actually finished
+```
+
+This is NOT thread pool queue depth - it's the number of coroutines concurrently awaiting I/O completion.
+
+**Example**: If you see "Progress: 245/1000" but only 45 transcripts on disk:
+
+- 245 conversations have finished GPU work
+- 200 coroutines are awaiting their `to_thread()` calls to complete
+- I/O is the bottleneck (GPU is faster than disk)
+
+**Why this design**:
+
+1. GPU semaphore is released immediately after GPU work (not blocked on I/O)
+2. Live status shows true GPU progress, useful for monitoring
+3. Source of truth (manifest/index) is written atomically - no data loss on crash

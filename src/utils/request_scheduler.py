@@ -1117,6 +1117,24 @@ class RequestScheduler:
             # retrieved" warnings on Ctrl+C. Resources (GPU, locks, memory) are
             # automatically released by the OS when the process exits.
             pass
+        except FileNotFoundError as e:
+            # FileNotFoundError can occur when vLLM's IPC socket/pipe is lost
+            # (e.g., worker process crashed). Wrap in VLLMBatchError for clarity.
+            from src.agent.async_vllm_agent import VLLMBatchError
+            wrapped = VLLMBatchError(
+                message=f"vLLM IPC error (worker may have crashed): {e}",
+                batch_size=1,
+                request_ids=[],
+                original_error=e,
+            )
+            conv_state = self.conversation_states[request.conversation_id]
+            if not conv_state.is_complete:
+                conv_state.is_complete = True
+                self._remove_conversation_requests(request.conversation_id)
+                await self._finalize_conversation(conv_state, error=wrapped)
+                _debug_print(
+                    f"vLLM IPC error in conversation {request.conversation_id}: {e}"
+                )
         except Exception as e:
             # Handle unexpected exceptions to prevent conversation from getting stuck.
             # Without this, unhandled exceptions cause the task to complete without

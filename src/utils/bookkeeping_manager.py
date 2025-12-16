@@ -273,7 +273,7 @@ class BookkeepingManager:
             json.dump(task_summary, f, indent=2)
 
         info_print(
-            f"Job summary saved: {display_path(summary_path, self.project_root)}"
+            f"Task summary saved: {display_path(summary_path, self.project_root)}"
         )
         return str(summary_path)
 
@@ -1034,6 +1034,10 @@ class StreamingJobSummary:
         self._file_handle: Optional[TextIO] = None
         self._summary_path: Optional[Path] = None
 
+        # Thread lock for atomic file writes (progress_callback runs in thread pool)
+        import threading
+        self._write_lock = threading.Lock()
+
         self._initialize_file()
 
     def _initialize_file(self) -> None:
@@ -1064,49 +1068,54 @@ class StreamingJobSummary:
         )
 
     def _write_current_state(self) -> None:
-        """Write current state to file (atomic write via temp file)."""
+        """Write current state to file (atomic write via temp file).
+
+        Thread-safe: uses lock to prevent race conditions when multiple
+        progress_callback threads call this concurrently.
+        """
         if self._summary_path is None:
             return
 
-        job_task_id = get_current_job_task_id()
-        exp_meta = self.config["experiment_metadata"]
+        with self._write_lock:
+            job_task_id = get_current_job_task_id()
+            exp_meta = self.config["experiment_metadata"]
 
-        # Calculate duration so far
-        current_time = datetime.now(timezone.utc)
-        duration_seconds = (current_time - self.start_time).total_seconds()
+            # Calculate duration so far
+            current_time = datetime.now(timezone.utc)
+            duration_seconds = (current_time - self.start_time).total_seconds()
 
-        summary = {
-            "job_task_id": job_task_id,
-            "experiment_name": exp_meta["experiment_name"],
-            "benchmark_subcategory": exp_meta["benchmark_subcategory"],
-            "start_time": format_timestamp(self.start_time),
-            "last_update": format_timestamp(current_time),
-            "duration_seconds": round(duration_seconds, 3),
-            "config_snapshot_path": self.config_snapshot_path,
-            "status": "in_progress",
-            "processing_statistics": {
-                "questions_total": self.questions_total,
-                "questions_attempted": self.questions_succeeded + self.questions_partial + self.questions_failed,
-                "questions_succeeded": self.questions_succeeded,
-                "questions_partial": self.questions_partial,
-                "questions_failed": self.questions_failed,
-            },
-            "completed_transcripts": [
-                {
-                    "transcript_id": stat["transcript_id"],
-                    "question_id": stat["question_id"],
-                    "status": stat["status"],
-                }
-                for stat in self.per_transcript_stats
-            ],
-            "errors": self.error_summary,
-        }
+            summary = {
+                "job_task_id": job_task_id,
+                "experiment_name": exp_meta["experiment_name"],
+                "benchmark_subcategory": exp_meta["benchmark_subcategory"],
+                "start_time": format_timestamp(self.start_time),
+                "last_update": format_timestamp(current_time),
+                "duration_seconds": round(duration_seconds, 3),
+                "config_snapshot_path": self.config_snapshot_path,
+                "status": "in_progress",
+                "processing_statistics": {
+                    "questions_total": self.questions_total,
+                    "questions_attempted": self.questions_succeeded + self.questions_partial + self.questions_failed,
+                    "questions_succeeded": self.questions_succeeded,
+                    "questions_partial": self.questions_partial,
+                    "questions_failed": self.questions_failed,
+                },
+                "completed_transcripts": [
+                    {
+                        "transcript_id": stat["transcript_id"],
+                        "question_id": stat["question_id"],
+                        "status": stat["status"],
+                    }
+                    for stat in self.per_transcript_stats
+                ],
+                "errors": self.error_summary,
+            }
 
-        # Atomic write: write to temp file, then rename
-        temp_path = self._summary_path.with_suffix(".json.tmp")
-        with open(temp_path, "w") as f:
-            json.dump(summary, f, indent=2)
-        temp_path.rename(self._summary_path)
+            # Atomic write: write to temp file, then rename
+            temp_path = self._summary_path.with_suffix(".json.tmp")
+            with open(temp_path, "w") as f:
+                json.dump(summary, f, indent=2)
+            temp_path.rename(self._summary_path)
 
     def record_completion(
         self,
