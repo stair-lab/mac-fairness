@@ -1,6 +1,7 @@
 # script/formatter/bbq_formatter.py
 import json
 import argparse
+from pathlib import Path
 
 
 def normalize_choices_to_abc(choices):
@@ -112,20 +113,50 @@ def format_bbq_to_unified(input_path, output_path, subcategory="race"):
             f_out.write(json.dumps(formatted) + "\n")
 
 
+def format_bbq_directory(input_dir, output_dir):
+    """Process all JSONL files in input directory and save to output directory.
+
+    Output filenames are derived from input filenames:
+    - Gender_identity.jsonl -> bbq_gender_identity.jsonl
+    - Race_ethnicity.jsonl -> bbq_race_ethnicity.jsonl
+    """
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    jsonl_files = list(input_path.glob("*.jsonl"))
+    if not jsonl_files:
+        print(f"No JSONL files found in {input_dir}")
+        return
+
+    for input_file in sorted(jsonl_files):
+        # Derive subcategory from filename (e.g., "Gender_identity" -> "gender_identity")
+        subcategory = input_file.stem.lower()
+
+        # Create output filename: bbq_<subcategory>.jsonl
+        output_filename = f"bbq_{subcategory}.jsonl"
+        output_file = output_path / output_filename
+
+        print(f"Processing {input_file.name} -> {output_filename}")
+        format_bbq_to_unified(input_file, output_file, subcategory)
+
+    print(f"✓ Formatted {len(jsonl_files)} BBQ files to {output_dir}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert BBQ benchmark to unified JSONL format"
     )
-    parser.add_argument("--input", required=True, help="Path to input BBQ JSONL file")
     parser.add_argument(
-        "--output", required=True, help="Path to output unified JSONL file"
+        "--input-dir",
+        required=True,
+        help="Directory containing BBQ JSONL files (e.g., raw_data/BBQ/data)",
     )
     parser.add_argument(
-        "--subcategory",
-        default="race",
-        help="BBQ subcategory (e.g., race, gender, age) for question IDs",
+        "--output-dir",
+        required=True,
+        help="Output directory for formatted files (e.g., data/BBQ)",
     )
 
     args = parser.parse_args()
-    format_bbq_to_unified(args.input, args.output, args.subcategory)
-    print(f"✓ Formatted BBQ data saved to {args.output}")
+    format_bbq_directory(args.input_dir, args.output_dir)

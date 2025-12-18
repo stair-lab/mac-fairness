@@ -426,8 +426,8 @@ mkdir -p raw_data/BBQ/data
 curl -L https://github.com/nyu-mll/BBQ/archive/main.tar.gz | tar -xz --strip-components=2 -C raw_data/BBQ/data BBQ-main/data
 
 python script/formatter/bbq_formatter.py \
-  --input ./raw_data/BBQ/data/Race_ethnicity.jsonl \
-  --output ./data/BBQ/bbq_race.jsonl
+  --input-dir raw_data/BBQ/data \
+  --output-dir data/BBQ
 
 # Format DiscrimEval benchmark
 python script/formatter/discrim_eval_formatter.py \
@@ -439,7 +439,7 @@ python script/formatter/discrim_eval_formatter.py \
 
 ```json
 {
-  "question_id": "bbq_race_42",
+  "question_id": "bbq_race_ethnicity_42",
   "source_dataset": "BBQ",
   "source_id": "42",
   "question_type": "multiple_choice",
@@ -499,16 +499,16 @@ For each task in a grid job:
 
 ### Artifact Lifecycle
 
-| Artifact                 | Location                                       | Lifecycle                          | Purpose                               |
-| ------------------------ | ---------------------------------------------- | ---------------------------------- | ------------------------------------- |
-| **Grid config snapshot** | `bookkeeping/_grid_config_snapshot/`           | Ephemeral (deleted on grid success)| Resume grid with identical parameters |
-| **Grid manifest**        | `bookkeeping/grid_manifest/`                   | Ephemeral (deleted on grid success)| Track task-level progress             |
-| **Task config snapshot** | `bookkeeping/config_snapshot/{benchmark}/`     | **Persistent**                     | Audit trail, reproducibility          |
-| **Task manifest**        | `experiment/.../task_manifest/`                | Ephemeral (deleted on task success)| Track question-level progress         |
-| **Lock file**            | `bookkeeping/.{experiment_name}.completion.lock` | Ephemeral (deleted on task finish) | Per-experiment atomic writes        |
-| **Task summary**         | `experiment/.../task_summary/`                 | **Persistent**                     | Execution statistics, results         |
-| **Transcripts**          | `experiment/.../transcript/`                   | **Persistent**                     | Conversation data                     |
-| **Index**                | `bookkeeping/{experiment_name}_index.jsonl`    | **Persistent**                     | Per-experiment pointer index          |
+| Artifact                 | Location                                         | Lifecycle                           | Purpose                               |
+| ------------------------ | ------------------------------------------------ | ----------------------------------- | ------------------------------------- |
+| **Grid config snapshot** | `bookkeeping/_grid_config_snapshot/`             | Ephemeral (deleted on grid success) | Resume grid with identical parameters |
+| **Grid manifest**        | `bookkeeping/grid_manifest/`                     | Ephemeral (deleted on grid success) | Track task-level progress             |
+| **Task config snapshot** | `bookkeeping/config_snapshot/{benchmark}/`       | **Persistent**                      | Audit trail, reproducibility          |
+| **Task manifest**        | `experiment/.../task_manifest/`                  | Ephemeral (deleted on task success) | Track question-level progress         |
+| **Lock file**            | `bookkeeping/.{experiment_name}.completion.lock` | Ephemeral (deleted on task finish)  | Per-experiment atomic writes          |
+| **Task summary**         | `experiment/.../task_summary/`                   | **Persistent**                      | Execution statistics, results         |
+| **Transcripts**          | `experiment/.../transcript/`                     | **Persistent**                      | Conversation data                     |
+| **Index**                | `bookkeeping/{experiment_name}_index.jsonl`      | **Persistent**                      | Per-experiment pointer index          |
 
 ### Task Manifests
 
@@ -528,8 +528,11 @@ Structure:
   "num_questions_planned": 100,
   "num_questions_processed": 45,
   "questions": {
-    "bbq_race_q001": { "status": "succeeded", "transcript_id": "a1b2c3d4-..." },
-    "bbq_race_q002": { "status": null, "transcript_id": "e5f6g7h8-..." }
+    "bbq_race_ethnicity_1": {
+      "status": "succeeded",
+      "transcript_id": "a1b2c3d4-..."
+    },
+    "bbq_race_ethnicity_2": { "status": null, "transcript_id": "e5f6g7h8-..." }
   },
   "created_at": "2025-12-15T10:00:00.000Z"
 }
@@ -583,7 +586,7 @@ Each index record is a lightweight pointer containing:
 
 ```json
 {
-  "question_id": "bbq_race_34",
+  "question_id": "bbq_race_ethnicity_34",
   "job_task_id": "1911869_0",
   "config_snapshot_path": "$MAC_FAIRNESS_WORKSPACE/bookkeeping/config_snapshot/...",
   "transcript_path": "$MAC_FAIRNESS_EXPERIMENT_ROOT/bbq_race/.../transcript/....json",
@@ -595,14 +598,14 @@ Each index record is a lightweight pointer containing:
 
 **Data recovery paths:**
 
-| Information | Source |
-|-------------|--------|
-| Full config | Load `config_snapshot_path` (YAML) |
-| Experiment name | Index filename: `{experiment_name}_index.jsonl` |
-| Benchmark | `question_id` prefix (e.g., `bbq_race_34` → `bbq_race`) |
-| Transcript ID | `transcript_path` filename |
-| Timestamps | Load transcript JSON |
-| Conversation details | Load `transcript_path` (JSON) |
+| Information          | Source                                                            |
+| -------------------- | ----------------------------------------------------------------- |
+| Full config          | Load `config_snapshot_path` (YAML)                                |
+| Experiment name      | Index filename: `{experiment_name}_index.jsonl`                   |
+| Benchmark            | `question_id` prefix (e.g., `bbq_race_ethnicity_34` → `bbq_race`) |
+| Transcript ID        | `transcript_path` filename                                        |
+| Timestamps           | Load transcript JSON                                              |
+| Conversation details | Load `transcript_path` (JSON)                                     |
 
 ---
 
