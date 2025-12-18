@@ -450,7 +450,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
 
     # Print summary
     info_print("=" * 60, prefix=False)
-    info_print(f"Grid job complete: {successful} succeeded, {failed} failed, {skipped} skipped")
+    info_print(f"Grid job complete: {successful} succeeded, {failed} not fully succeeded, {skipped} skipped")
     if failed_configs:
         info_print("Some questions not succeeded for configurations:", prefix=False)
         for idx, name, err in failed_configs:
