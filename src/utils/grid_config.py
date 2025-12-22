@@ -28,17 +28,67 @@ Usage:
 
     # sweep/broadcast use Cartesian product, zip iterates through value sets together
     # This generates 2 x 2 x 2 x 2 = 16 configurations
+
+Runtime placeholders:
+    Values in sweep, broadcast, zip, and derive can use {runtime.timestamp} which
+    will be replaced with the current UTC timestamp (format: YYYYMMDDTHHmmZ) at
+    grid expansion time. This is useful for experiment repetitions:
+
+    zip:
+      model_config:
+        - experiment_metadata.experiment_name: "{runtime.timestamp}_my-exp_model-a"
+          model_definitions.llm_0.model_path: model-a
+
+    Run with --rep N to repeat the entire grid N times, each with a unique timestamp.
 """
 
 import copy
 import itertools
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 from src.utils.logging import info_print
+
+
+def _format_runtime_timestamp(dt: datetime) -> str:
+    """Format a datetime as a runtime timestamp for experiment names.
+
+    Args:
+        dt: Datetime object (should be UTC)
+
+    Returns:
+        Formatted string: YYYYMMDDTHHmmZ (e.g., 20251218T1900Z)
+    """
+    return dt.strftime("%Y%m%dT%H%MZ")
+
+
+def _substitute_runtime_placeholders(value: Any, runtime_context: Dict[str, str]) -> Any:
+    """Substitute {runtime.*} placeholders in a value.
+
+    Args:
+        value: Value to process (string, list, dict, or other)
+        runtime_context: Dict mapping placeholder names to values
+            (e.g., {"timestamp": "20251218T1900Z"})
+
+    Returns:
+        Value with placeholders substituted
+    """
+    if isinstance(value, str):
+        # Replace {runtime.key} placeholders
+        for key, replacement in runtime_context.items():
+            placeholder = f"{{runtime.{key}}}"
+            value = value.replace(placeholder, replacement)
+        return value
+    elif isinstance(value, dict):
+        return {k: _substitute_runtime_placeholders(v, runtime_context) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [_substitute_runtime_placeholders(item, runtime_context) for item in value]
+    else:
+        return value
 
 
 def _get_nested_value(config: Dict[str, Any], key_path: str) -> Any:
@@ -163,16 +213,33 @@ class GridConfigExpander:
     BROADCAST_KEY = "broadcast"
     ZIP_KEY = "zip"
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, runtime_timestamp: Optional[datetime] = None):
         """Initialize with a configuration file path.
 
         Args:
             config_path: Path to the grid configuration YAML file
+            runtime_timestamp: Optional timestamp to use for {runtime.timestamp} placeholder.
+                If None, uses current UTC time.
         """
         self.config_path = Path(config_path)
 
+        if runtime_timestamp is None:
+            runtime_timestamp = datetime.now(timezone.utc)
+        self.runtime_timestamp = runtime_timestamp
+
+        # Build runtime context for placeholder substitution
+        self.runtime_context = {
+            "timestamp": _format_runtime_timestamp(runtime_timestamp),
+        }
+
         with open(self.config_path, "r") as f:
             self.raw_config = yaml.safe_load(f)
+
+        # Apply runtime placeholder substitution to the _grid section
+        if self.GRID_KEY in self.raw_config:
+            self.raw_config[self.GRID_KEY] = _substitute_runtime_placeholders(
+                self.raw_config[self.GRID_KEY], self.runtime_context
+            )
 
     def is_grid_config(self) -> bool:
         """Check if this configuration is a grid config.
@@ -463,18 +530,21 @@ class GridConfigExpander:
 
 
 def load_grid_or_regular_config(
-    config_path: str, is_grid: bool = False
+    config_path: str,
+    is_grid: bool = False,
+    runtime_timestamp: Optional[datetime] = None,
 ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
     """Load a configuration file, expanding if it's a grid config.
 
     Args:
         config_path: Path to configuration file
         is_grid: If True, treat as grid config; if False, load as regular config
+        runtime_timestamp: Optional timestamp for {runtime.timestamp} placeholder
 
     Returns:
         List of (config_dict, grid_sweep_specs) tuples
     """
-    expander = GridConfigExpander(config_path)
+    expander = GridConfigExpander(config_path, runtime_timestamp=runtime_timestamp)
 
     if is_grid:
         if not expander.is_grid_config():

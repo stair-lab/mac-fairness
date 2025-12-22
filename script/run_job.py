@@ -184,9 +184,49 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
     import tempfile
 
     config_path = Path(args.config)
+    rep_count = getattr(args, 'rep', 1) or 1
 
-    # Load and expand grid config
-    expander = GridConfigExpander(str(config_path))
+    # For repetitions > 1, we run the entire grid multiple times with different timestamps
+    if rep_count > 1:
+        info_print(f"Running {rep_count} repetitions of the grid configuration")
+        total_success = 0
+        total_fail = 0
+        for rep_idx in range(rep_count):
+            info_print("=" * 60, prefix=False)
+            info_print(f"REPETITION {rep_idx + 1}/{rep_count}", prefix=False)
+            info_print("=" * 60, prefix=False)
+            # Create a new timestamp for each repetition
+            rep_timestamp = datetime.now(timezone.utc)
+            result = _run_single_grid(args, config_path, rep_timestamp)
+            if result == 0:
+                total_success += 1
+            else:
+                total_fail += 1
+        info_print("=" * 60, prefix=False)
+        info_print(f"All repetitions complete: {total_success} succeeded, {total_fail} failed")
+        info_print("=" * 60, prefix=False)
+        return 0 if total_fail == 0 else 1
+
+    # Single run (no repetitions)
+    submission_timestamp = datetime.now(timezone.utc)
+    return _run_single_grid(args, config_path, submission_timestamp)
+
+
+def _run_single_grid(args: argparse.Namespace, config_path: Path, submission_timestamp: datetime) -> int:
+    """Run a single grid experiment with a specific timestamp.
+
+    Args:
+        args: Parsed command-line arguments
+        config_path: Path to the grid configuration file
+        submission_timestamp: Timestamp for this grid run (used for {runtime.timestamp})
+
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    import tempfile
+
+    # Load and expand grid config with the submission timestamp
+    expander = GridConfigExpander(str(config_path), runtime_timestamp=submission_timestamp)
 
     if not expander.is_grid_config():
         info_print(f"Error: --grid flag specified but config has no _grid.sweep section")
@@ -296,7 +336,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
         pending_indices = list(range(len(expanded_configs)))
         succeeded_task_info = {}  # Fresh run, no processed runs to carry over
 
-    submission_timestamp = datetime.now(timezone.utc)
+    # Use the submission_timestamp passed in (already set for runtime placeholder substitution)
     manifest_path, _grid_config_snapshot_path = grid_manifest_manager.save_grid_manifest(
         str(config_path), expanded_configs, submission_timestamp,
         is_resume=args.resume, succeeded_task_info=succeeded_task_info
@@ -522,7 +562,25 @@ Environment Variables:
         help="Resume a grid run from the most recent manifest",
     )
 
+    parser.add_argument(
+        "--rep",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Run the grid N times with different timestamps (for experiment repetitions)",
+    )
+
     args = parser.parse_args()
+
+    # Validate argument combinations
+    if args.resume and args.rep > 1:
+        info_print("Error: --resume and --rep cannot be used together")
+        info_print("  --resume continues an interrupted run, --rep starts fresh repetitions")
+        return 1
+
+    if args.rep < 1:
+        info_print("Error: --rep must be at least 1")
+        return 1
 
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGTERM, signal_handler)
