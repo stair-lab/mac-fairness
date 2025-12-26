@@ -172,6 +172,133 @@ def signal_handler(signum: int, _frame) -> None:
     os._exit(128 + signum)
 
 
+def _run_task_manifest_resume(
+    incomplete_task_manifests: List[Tuple[Path, List[str], Dict[str, Dict[str, Any]]]],
+    old_grid_manifest_paths: List[Path],
+    grid_config_snapshot_path: str,
+) -> int:
+    """Resume incomplete questions from task manifests (for rep run resume).
+
+    This function handles resume for rep runs where multiple grid manifests share
+    the same grid config snapshot. Instead of re-running grid expansion, it directly
+    processes each task manifest with null questions.
+
+    Args:
+        incomplete_task_manifests: List of (manifest_path, null_question_ids, all_questions)
+            tuples from find_all_task_manifests_by_grid_snapshot
+        old_grid_manifest_paths: Grid manifest paths to delete after successful completion
+        grid_config_snapshot_path: Path to the grid config snapshot (for resume command)
+
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    global _grid_resume_path
+    _grid_resume_path = grid_config_snapshot_path
+
+    info_print(f"Resuming {len(incomplete_task_manifests)} task manifest(s) with incomplete questions...")
+
+    successful = 0
+    failed = 0
+    backend = None
+
+    for idx, (manifest_path, null_question_ids, all_questions) in enumerate(incomplete_task_manifests):
+        # Extract experiment info from manifest path
+        # Path structure: {exp_root}/{benchmark}/{experiment}/task_manifest/{timestamp}_{job_task_id}.json
+        exp_dir = manifest_path.parent.parent
+        exp_name = exp_dir.name
+        benchmark = exp_dir.parent.name
+
+        info_print("=" * 60, prefix=False)
+        info_print(f"Task {idx + 1}/{len(incomplete_task_manifests)}: {benchmark}/{exp_name}")
+        info_print(f"  Null questions: {len(null_question_ids)}")
+        info_print("=" * 60, prefix=False)
+
+        # Load manifest to get config_snapshot_path
+        try:
+            import json
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+            config_snapshot_path = manifest.get("config_snapshot_path", "")
+            if not config_snapshot_path:
+                info_print(f"  Error: No config_snapshot_path in manifest, skipping")
+                failed += 1
+                continue
+
+            # Resolve the config snapshot path
+            resolved_config_path = resolve_path(config_snapshot_path, project_root)
+            if not Path(resolved_config_path).exists():
+                info_print(f"  Error: Config snapshot not found: {config_snapshot_path}")
+                failed += 1
+                continue
+
+        except (json.JSONDecodeError, OSError) as e:
+            info_print(f"  Error reading manifest: {e}")
+            failed += 1
+            continue
+
+        try:
+            # Get backend from config for cleanup
+            config = validate_config(Path(resolved_config_path))
+            backend = get_backend_type(config)
+
+            # Run orchestrator with the specific question IDs
+            orchestrator = ConversationOrchestrator(resolved_config_path)
+
+            # Pass the existing question data for transcript_id preservation
+            all_succeeded = asyncio.run(orchestrator.run_job(
+                question_ids=set(null_question_ids),
+                succeeded_questions=all_questions,
+                existing_snapshot_path=config_snapshot_path,
+                old_manifest_path=manifest_path,
+                skip_cleanup=False,
+            ))
+
+            if all_succeeded:
+                successful += 1
+                info_print(f"Task {idx + 1} completed successfully")
+            else:
+                failed += 1
+                info_print(f"Task {idx + 1} completed with failures")
+
+        except Exception as e:
+            failed += 1
+            error_msg = f"{type(e).__name__}: {e}"
+            info_print(f"Task {idx + 1} failed: {error_msg}")
+            if is_debug_enabled():
+                import traceback
+                traceback.print_exc()
+
+    # Print summary
+    info_print("=" * 60, prefix=False)
+    info_print(f"Rep run resume complete: {successful} succeeded, {failed} failed")
+    info_print("=" * 60, prefix=False)
+
+    # Delete old grid manifests only if all tasks succeeded
+    if failed == 0 and old_grid_manifest_paths:
+        for old_path in old_grid_manifest_paths:
+            try:
+                if old_path.exists():
+                    old_path.unlink()
+                    info_print(f"Deleted old grid manifest: {old_path.name}")
+            except OSError:
+                pass
+
+        # Also delete the grid config snapshot if all succeeded
+        resolved_snapshot = resolve_path(grid_config_snapshot_path, project_root)
+        try:
+            if Path(resolved_snapshot).exists():
+                Path(resolved_snapshot).unlink()
+                info_print(f"Deleted grid config snapshot: {Path(resolved_snapshot).name}")
+        except OSError:
+            pass
+
+    # Cleanup resources
+    if backend:
+        cleanup_resources(backend)
+
+    return 0 if failed == 0 else 1
+
+
 def run_grid_experiments(args: argparse.Namespace) -> int:
     """Run experiments from a grid configuration file.
 
@@ -181,14 +308,28 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
-    import tempfile
-
     config_path = Path(args.config)
     rep_count = getattr(args, 'rep', 1) or 1
 
     # For repetitions > 1, we run the entire grid multiple times with different timestamps
     if rep_count > 1:
+        # For dry-run, don't save snapshot or print repetition info
+        # Just run _run_single_grid which handles dry-run display
+        if args.dry_run:
+            submission_timestamp = datetime.now(timezone.utc)
+            return _run_single_grid(args, config_path, submission_timestamp)
+
         info_print(f"Running {rep_count} repetitions of the grid configuration")
+
+        # Save grid config snapshot ONCE from the original scratch config
+        # All repetitions will reuse this same snapshot
+        grid_manifest_manager = GridManifestManager()
+        initial_timestamp = datetime.now(timezone.utc)
+        grid_config_snapshot_path = grid_manifest_manager._save_grid_config_snapshot(
+            str(config_path), initial_timestamp
+        )
+        info_print(f"Grid config snapshot saved: {grid_config_snapshot_path}")
+
         total_success = 0
         total_fail = 0
         for rep_idx in range(rep_count):
@@ -197,7 +338,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             info_print("=" * 60, prefix=False)
             # Create a new timestamp for each repetition
             rep_timestamp = datetime.now(timezone.utc)
-            result = _run_single_grid(args, config_path, rep_timestamp)
+            result = _run_single_grid(args, config_path, rep_timestamp, grid_config_snapshot_path)
             if result == 0:
                 total_success += 1
             else:
@@ -212,13 +353,21 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
     return _run_single_grid(args, config_path, submission_timestamp)
 
 
-def _run_single_grid(args: argparse.Namespace, config_path: Path, submission_timestamp: datetime) -> int:
+def _run_single_grid(
+    args: argparse.Namespace,
+    config_path: Path,
+    submission_timestamp: datetime,
+    existing_grid_snapshot_path: Optional[str] = None,
+) -> int:
     """Run a single grid experiment with a specific timestamp.
 
     Args:
         args: Parsed command-line arguments
         config_path: Path to the grid configuration file
         submission_timestamp: Timestamp for this grid run (used for {runtime.timestamp})
+        existing_grid_snapshot_path: Optional path to an existing grid config snapshot.
+            When provided (e.g., for rep runs), this snapshot is reused instead of
+            creating a new one. This ensures all repetitions share the same snapshot.
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -252,6 +401,7 @@ def _run_single_grid(args: argparse.Namespace, config_path: Path, submission_tim
 
     # Check for resume mode
     old_grid_manifest_path: Optional[Path] = None
+    old_grid_manifest_paths: List[Path] = []  # For rep runs with multiple manifests
     if args.resume:
         # Resume requires using the grid config snapshot path
         config_parent = config_path.parent.name
@@ -265,7 +415,45 @@ def _run_single_grid(args: argparse.Namespace, config_path: Path, submission_tim
             print()
             return 1
 
-        # Load manifest for resume (without deleting - delete after new manifest is created)
+        # First, try to find all task manifests with null questions (for rep run resume)
+        # This scans all task manifests that reference this grid config snapshot
+        incomplete_task_manifests = bookkeeping_manager.find_all_task_manifests_by_grid_snapshot(
+            str(config_path)
+        )
+
+        if incomplete_task_manifests:
+            # Rep run resume: found task manifests with null questions
+            # We'll handle these directly instead of using grid manifest logic
+            info_print(f"Found {len(incomplete_task_manifests)} task manifest(s) with incomplete questions")
+
+            # Load all grid manifests to delete them after resume
+            all_manifests_result = grid_manifest_manager.load_all_manifests_for_resume(str(config_path))
+            if all_manifests_result:
+                _, old_grid_manifest_paths = all_manifests_result
+
+            # Handle dry-run for rep run resume
+            if args.dry_run:
+                info_print("-" * 60, prefix=False)
+                info_print("Task manifests to resume:", prefix=False)
+                for manifest_path, null_question_ids, all_questions in incomplete_task_manifests:
+                    succeeded_count = sum(
+                        1 for q in all_questions.values() if q.get("status") == "succeeded"
+                    )
+                    total = len(all_questions)
+                    info_print(f"  {manifest_path.parent.parent.name}/{manifest_path.parent.name}", prefix=False)
+                    info_print(f"    ├── Progress: {succeeded_count}/{total} succeeded", prefix=False)
+                    info_print(f"    └── Null questions: {len(null_question_ids)}", prefix=False)
+                info_print(f"Dry run complete. {len(incomplete_task_manifests)} task manifests would be resumed.")
+                return 0
+
+            # Run resume for each task manifest with null questions
+            return _run_task_manifest_resume(
+                incomplete_task_manifests,
+                old_grid_manifest_paths,
+                str(config_path),
+            )
+
+        # Fall back to single grid manifest resume (for non-rep runs)
         result = grid_manifest_manager.load_manifest_for_resume(str(config_path))
 
         if result is not None:
@@ -337,9 +525,11 @@ def _run_single_grid(args: argparse.Namespace, config_path: Path, submission_tim
         succeeded_task_info = {}  # Fresh run, no processed runs to carry over
 
     # Use the submission_timestamp passed in (already set for runtime placeholder substitution)
+    # For rep runs, reuse the existing_grid_snapshot_path instead of creating a new one
     manifest_path, _grid_config_snapshot_path = grid_manifest_manager.save_grid_manifest(
         str(config_path), expanded_configs, submission_timestamp,
-        is_resume=args.resume, succeeded_task_info=succeeded_task_info
+        is_resume=args.resume, succeeded_task_info=succeeded_task_info,
+        existing_grid_snapshot_path=existing_grid_snapshot_path
     )
 
     # Delete old grid manifest AFTER new one is created (atomic create-then-delete)
@@ -428,6 +618,11 @@ def _run_single_grid(args: argparse.Namespace, config_path: Path, submission_tim
                 # Resolve env var for file access (resume_config_path may have $MAC_FAIRNESS_WORKSPACE)
                 config_to_use = resolve_path(resume_config_path, project_root)
             else:
+                # Add grid config snapshot path to experiment_metadata for resume tracking
+                # This allows find_all_task_manifests_by_grid_snapshot to identify tasks
+                # that were created from this grid config (important for rep run resume)
+                config["experiment_metadata"]["_grid_config_snapshot_path"] = _grid_config_snapshot_path
+
                 # Write config to a temporary file
                 with tempfile.NamedTemporaryFile(
                     mode="w", suffix=".yaml", delete=False

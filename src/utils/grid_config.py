@@ -31,7 +31,7 @@ Usage:
 
 Runtime placeholders:
     Values in sweep, broadcast, zip, and derive can use {runtime.timestamp} which
-    will be replaced with the current UTC timestamp (format: YYYYMMDDTHHmmZ) at
+    will be replaced with the current UTC timestamp (format: YYYYMMDDTHHMMss.mmmZ) at
     grid expansion time. This is useful for experiment repetitions:
 
     zip:
@@ -61,9 +61,9 @@ def _format_runtime_timestamp(dt: datetime) -> str:
         dt: Datetime object (should be UTC)
 
     Returns:
-        Formatted string: YYYYMMDDTHHmmZ (e.g., 20251218T1900Z)
+        Formatted string: YYYYMMDDTHHMMss.mmmZ (e.g., 20251218T190000.123Z)
     """
-    return dt.strftime("%Y%m%dT%H%MZ")
+    return dt.strftime("%Y%m%dT%H%M%S") + f".{dt.microsecond // 1000:03d}Z"
 
 
 def _substitute_runtime_placeholders(value: Any, runtime_context: Dict[str, str]) -> Any:

@@ -871,6 +871,114 @@ class BookkeepingManager:
         except OSError:
             pass  # Non-fatal: lock file cleanup is best-effort
 
+    def find_all_task_manifests_by_grid_snapshot(
+        self,
+        grid_config_snapshot_path: str,
+    ) -> List[Tuple[Path, List[str], Dict[str, Dict[str, Any]]]]:
+        """Find ALL task manifests whose config_snapshot references the grid config snapshot.
+
+        Used for rep run resume: finds all task manifests across all experiment directories
+        that were created from runs using this grid config snapshot.
+
+        The config_snapshot for each task is saved in:
+            bookkeeping/config_snapshot/{benchmark}/{experiment_name}_{timestamp}.yaml
+
+        This config_snapshot file contains the full expanded config. We can't directly
+        match it to the grid config snapshot. Instead, we rely on the grid manifest
+        to tell us which experiment_name/benchmark combinations to look for.
+
+        Args:
+            grid_config_snapshot_path: Path to the grid config snapshot file
+
+        Returns:
+            List of (manifest_path, null_question_ids, all_questions) tuples.
+            Each tuple represents a task manifest with incomplete questions.
+        """
+        # This method is designed to be called after load_all_manifests_for_resume
+        # which provides the experiment_name/benchmark pairs to search for.
+        # For now, we scan experiment directories and check task manifests.
+
+        exp_root_path = self.get_experiment_root()
+        results: List[Tuple[Path, List[str], Dict[str, Dict[str, Any]]]] = []
+
+        # Resolve the grid config snapshot path for comparison
+        resolved_grid_snapshot = str(Path(resolve_path(
+            grid_config_snapshot_path, self.project_root
+        )).resolve())
+
+        # Scan all benchmark directories
+        if not exp_root_path.exists():
+            return results
+
+        for benchmark_dir in exp_root_path.iterdir():
+            if not benchmark_dir.is_dir():
+                continue
+
+            # Scan all experiment directories in this benchmark
+            for exp_dir in benchmark_dir.iterdir():
+                if not exp_dir.is_dir():
+                    continue
+
+                manifest_dir = exp_dir / "task_manifest"
+                if not manifest_dir.exists():
+                    continue
+
+                # Check each task manifest
+                for manifest_file in manifest_dir.glob("*.json"):
+                    try:
+                        with open(manifest_file, "r") as f:
+                            manifest = json.load(f)
+                    except (json.JSONDecodeError, OSError):
+                        continue
+
+                    # Check if this task manifest's config_snapshot references
+                    # a config that was derived from the grid config snapshot
+                    config_snapshot_path = manifest.get("config_snapshot_path", "")
+                    if not config_snapshot_path:
+                        continue
+
+                    # Load the config snapshot to check if it contains grid metadata
+                    resolved_config_snapshot = resolve_path(
+                        config_snapshot_path, self.project_root
+                    )
+                    if not Path(resolved_config_snapshot).exists():
+                        continue
+
+                    try:
+                        import yaml
+                        with open(resolved_config_snapshot, "r") as f:
+                            config = yaml.safe_load(f)
+
+                        # Check if the config has _grid_config_snapshot_path that matches
+                        grid_snapshot_in_config = config.get(
+                            "experiment_metadata", {}
+                        ).get("_grid_config_snapshot_path", "")
+
+                        if grid_snapshot_in_config:
+                            resolved_from_config = str(Path(resolve_path(
+                                grid_snapshot_in_config, self.project_root
+                            )).resolve())
+                            if resolved_from_config != resolved_grid_snapshot:
+                                continue
+                        else:
+                            # No grid snapshot reference in config, skip
+                            continue
+
+                    except (yaml.YAMLError, OSError):
+                        continue
+
+                    # Found a matching task manifest - extract null questions
+                    questions = manifest.get("questions", {})
+                    null_question_ids = [
+                        qid for qid, q_entry in questions.items()
+                        if q_entry.get("status") != "succeeded"
+                    ]
+
+                    if null_question_ids:
+                        results.append((manifest_file, null_question_ids, questions))
+
+        return results
+
     def find_task_manifest_and_get_null_questions(
         self,
         experiment_name: str,
@@ -1276,6 +1384,7 @@ class GridManifestManager:
         submission_timestamp: datetime,
         is_resume: bool = False,
         succeeded_task_info: Optional[Dict[int, Dict[str, Any]]] = None,
+        existing_grid_snapshot_path: Optional[str] = None,
     ) -> Tuple[Path, str]:
         """Save a grid manifest at the start of a grid run.
 
@@ -1286,6 +1395,9 @@ class GridManifestManager:
             is_resume: If True, grid_config_path is already a snapshot; reuse it
             succeeded_task_info: Dict mapping task_id to the full run entry dict for runs
                 that were already processed (for resume). The run entries are used directly.
+            existing_grid_snapshot_path: Optional path to an existing grid config snapshot.
+                When provided (e.g., for rep runs), this snapshot is reused instead of
+                creating a new one. This ensures all repetitions share the same snapshot.
 
         Returns:
             Tuple of (manifest_path, _grid_config_snapshot_path)
@@ -1298,7 +1410,10 @@ class GridManifestManager:
         manifest_path = manifest_dir / f"{timestamp_str}_{pid}.json"
 
         # Save or reuse grid config snapshot
-        if is_resume:
+        if existing_grid_snapshot_path is not None:
+            # Reuse existing snapshot (for rep runs - all repetitions share one snapshot)
+            _grid_config_snapshot_path = existing_grid_snapshot_path
+        elif is_resume:
             # On resume, grid_config_path is already the snapshot path
             snapshot_filename = Path(grid_config_path).name
             _grid_config_snapshot_path = f"$MAC_FAIRNESS_WORKSPACE/bookkeeping/_grid_config_snapshot/{snapshot_filename}"
@@ -1551,20 +1666,23 @@ class GridManifestManager:
                 info_print(f"Warning: Could not delete grid manifest: {e}")
         return False
 
-    def _find_manifest(
+    def _find_all_manifests(
         self, grid_config_path: str
-    ) -> Optional[Tuple[Path, dict]]:
-        """Find the most recent manifest for a grid config.
+    ) -> List[Tuple[Path, dict]]:
+        """Find ALL manifests matching a grid config snapshot path.
+
+        Used for rep runs where multiple grid manifests share the same snapshot.
 
         Args:
             grid_config_path: Path to the grid config file (or snapshot)
 
         Returns:
-            Tuple of (manifest_path, manifest_dict) or None if not found.
+            List of (manifest_path, manifest_dict) tuples, sorted by modification time
+            (most recent first). Empty list if none found.
         """
         manifest_dir = self._get_manifest_dir()
         if not manifest_dir.exists():
-            return None
+            return []
 
         # Clean up any stale .json.tmp files from interrupted writes
         for tmp_file in manifest_dir.glob("*.json.tmp"):
@@ -1594,11 +1712,25 @@ class GridManifestManager:
                 info_print(f"Warning: Could not read manifest {manifest_file.name}: {e}")
                 continue
 
-        if not matching_manifests:
-            return None
+        # Sort by modification time (most recent first)
+        return sorted(matching_manifests, key=lambda x: x[0].stat().st_mtime, reverse=True)
 
-        # Get most recently modified
-        return max(matching_manifests, key=lambda x: x[0].stat().st_mtime)
+    def _find_manifest(
+        self, grid_config_path: str
+    ) -> Optional[Tuple[Path, dict]]:
+        """Find the most recent manifest for a grid config.
+
+        Args:
+            grid_config_path: Path to the grid config file (or snapshot)
+
+        Returns:
+            Tuple of (manifest_path, manifest_dict) or None if not found.
+        """
+        all_manifests = self._find_all_manifests(grid_config_path)
+        if not all_manifests:
+            return None
+        # Return most recent (first in sorted list)
+        return all_manifests[0]
 
     def _extract_pending_from_manifest(
         self, manifest: dict
@@ -1654,6 +1786,53 @@ class GridManifestManager:
         except (json.JSONDecodeError, OSError):
             pass
         return False
+
+    def load_all_manifests_for_resume(
+        self, grid_config_path: str
+    ) -> Optional[Tuple[List[Dict[str, Any]], List[Path]]]:
+        """Load ALL manifests for resume (for rep runs with multiple manifests).
+
+        For rep runs, multiple grid manifests share the same grid config snapshot.
+        This method finds all of them and extracts started task info from each,
+        so we can find task manifests with null questions across all repetitions.
+
+        Args:
+            grid_config_path: Path to the grid config snapshot
+
+        Returns:
+            Tuple of (all_started_tasks, old_manifest_paths) or None if no manifests found.
+            - all_started_tasks: List of dicts with keys:
+                - experiment_name: The experiment name (includes rep timestamp)
+                - benchmark_subcategory: The benchmark subcategory
+                - manifest_path: Path to the grid manifest this task came from
+            - old_manifest_paths: List of manifest paths to delete after new manifest created
+        """
+        all_manifests = self._find_all_manifests(grid_config_path)
+        if not all_manifests:
+            return None
+
+        all_started_tasks: List[Dict[str, Any]] = []
+        old_manifest_paths: List[Path] = []
+
+        for manifest_path, manifest in all_manifests:
+            old_manifest_paths.append(manifest_path)
+            # Extract started tasks from this manifest
+            for task in manifest.get("tasks", []):
+                status = task.get("status")
+                # Include both "started" and null status tasks
+                # (null means task was never started, started means it may have partial progress)
+                if status != "succeeded":
+                    all_started_tasks.append({
+                        "experiment_name": task.get("experiment_name", ""),
+                        "benchmark_subcategory": task.get("benchmark_subcategory", ""),
+                        "manifest_path": manifest_path,
+                    })
+
+        if not all_started_tasks:
+            return None
+
+        info_print(f"Found {len(all_manifests)} grid manifest(s) with {len(all_started_tasks)} incomplete task(s)")
+        return all_started_tasks, old_manifest_paths
 
     def load_manifest_for_resume(
         self, grid_config_path: str
