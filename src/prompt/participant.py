@@ -1,7 +1,10 @@
 """Participant role prompt builder implementation."""
 
+import inflect
 from typing import Dict, List, Optional, Any
 from .base import BasePromptBuilder
+
+_inflect_engine = inflect.engine()
 
 # Default prompt template configuration for participants
 DEFAULT_PARTICIPANT_TEMPLATE_CONFIG = {
@@ -369,9 +372,10 @@ class ParticipantPromptBuilder(BasePromptBuilder):
                 if c.get("id") and c["id"].isupper() and c["id"].isalpha()
             ]
             if valid_choices:
+                num_choices = _inflect_engine.number_to_words(len(valid_choices))
                 return (
-                    "You must choose one from the following options: "
-                    + " or ".join(f'"{c["text"]}"' for c in valid_choices)
+                    f"You MUST select exactly one of the {num_choices} options listed below. If none fully reflects your answer, choose the option that is least inconsistent with it, and use the selected wording verbatim: "
+                    + " OR ".join(f'"{c["text"]}"' for c in valid_choices)
                 )
             return '"your selected choice"'
         return "your answer as a string"

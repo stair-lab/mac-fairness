@@ -8,6 +8,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "aiohttp[speedups]>=3.13.0",
     "huggingface-hub[mcp]>=0.36.0; sys_platform != 'darwin'",
+    "inflect>=7.5.0",
     "json-repair>=0.54.2",
     "pyyaml>=6.0.3",
     "torch-c-dlpack-ext>=0.1.4; sys_platform != 'darwin'",

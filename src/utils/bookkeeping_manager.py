@@ -1623,11 +1623,14 @@ class GridManifestManager:
         tasks = manifest.get("tasks", [])
         return all(t.get("status") == "succeeded" for t in tasks)
 
-    def delete_if_complete(self, manifest_path: Path) -> bool:
-        """Delete manifest and grid config snapshot if all tasks have succeeded.
+    def delete_if_complete(
+        self, manifest_path: Path, delete_snapshot: bool = True
+    ) -> bool:
+        """Delete manifest and optionally grid config snapshot if all tasks succeeded.
 
         Args:
             manifest_path: Path to the manifest file
+            delete_snapshot: Whether to also delete the grid config snapshot.
 
         Returns:
             True if manifest was deleted
@@ -1649,9 +1652,8 @@ class GridManifestManager:
                     f"{display_path(manifest_path, self.project_root)}"
                 )
 
-                # Also delete the grid config snapshot
-                if _grid_config_snapshot_path:
-                    # Resolve env var placeholders to absolute path
+                # Delete the grid config snapshot only if requested
+                if delete_snapshot and _grid_config_snapshot_path:
                     resolved_path = resolve_path(_grid_config_snapshot_path, self.project_root)
                     snapshot_path = Path(resolved_path)
                     if snapshot_path.exists():
@@ -1701,8 +1703,8 @@ class GridManifestManager:
                     manifest = json.load(f)
                 # Match by snapshot path (resume requires using snapshot path)
                 snapshot_path = manifest.get("grid_config_snapshot_path", "")
-                # Resolve env var placeholders for comparison
-                resolved_snapshot = resolve_path(snapshot_path, self.project_root)
+                # Resolve env var placeholders and normalize to absolute path for comparison
+                resolved_snapshot = str(Path(resolve_path(snapshot_path, self.project_root)).resolve())
                 if config_path_resolved == resolved_snapshot:
                     matching_manifests.append((manifest_file, manifest))
             except json.JSONDecodeError as e:

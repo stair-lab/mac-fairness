@@ -6,12 +6,13 @@ vLLM handles continuous batching internally.
 
 import gc
 import os
+import pprint
 import re
 import select
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from vllm.engine.async_llm_engine import AsyncLLMEngine
 from jinja2.exceptions import TemplateError
 
 from .base_agent import BaseAgent
-from src.utils import debug_print, info_print
+from src.utils import debug_print, info_print, is_debug_enabled
 from src.utils.errors import (
     VLLMBatchError,
     VLLMEngineNotInitializedError,
@@ -44,6 +45,8 @@ class VLLMOutputCapture:
     vLLM v1 runs EngineCore in a subprocess which writes directly to file descriptors,
     bypassing Python's sys.stdout/sys.stderr. We use os.dup2() to redirect at the
     file descriptor level, with a pipe to capture while still forwarding output.
+
+    Output is only forwarded to stdout when debug mode is enabled (MAC_FAIRNESS_DEBUG_FLAG=1).
     """
 
     # Pattern matches: "Maximum concurrency for 2,048 tokens per request: 110.31x"
@@ -62,6 +65,7 @@ class VLLMOutputCapture:
         self._pipe_write_fd: Optional[int] = None
         self._reader_thread: Optional[threading.Thread] = None
         self._stop_event: Optional[threading.Event] = None
+        self._forward_output: bool = is_debug_enabled()
 
     def __enter__(self) -> "VLLMOutputCapture":
         """Start capturing stdout/stderr at the file descriptor level."""
@@ -88,7 +92,7 @@ class VLLMOutputCapture:
         return self
 
     def _reader_loop(self) -> None:
-        """Read from pipe, capture, and forward to original stdout."""
+        """Read from pipe, capture, and optionally forward to original stdout."""
         buffer = []
         while not self._stop_event.is_set():
             try:
@@ -97,8 +101,9 @@ class VLLMOutputCapture:
                 if readable:
                     data = os.read(self._pipe_read_fd, 4096)
                     if data:
-                        # Forward to original stdout
-                        os.write(self._saved_stdout_fd, data)
+                        # Forward to original stdout only in debug mode
+                        if self._forward_output:
+                            os.write(self._saved_stdout_fd, data)
                         # Capture for parsing
                         buffer.append(data.decode("utf-8", errors="replace"))
             except Exception:
@@ -113,7 +118,8 @@ class VLLMOutputCapture:
                 data = os.read(self._pipe_read_fd, 4096)
                 if not data:
                     break
-                os.write(self._saved_stdout_fd, data)
+                if self._forward_output:
+                    os.write(self._saved_stdout_fd, data)
                 buffer.append(data.decode("utf-8", errors="replace"))
         except Exception:
             pass
@@ -401,7 +407,9 @@ class AsyncVLLMAgent(BaseAgent):
         info_print(f"Initializing AsyncLLMEngine for {self.model_path}")
 
         engine_args = self._build_engine_args()
-        debug_print(f"AsyncEngineArgs: {engine_args}")
+        if is_debug_enabled():
+            print("[DEBUG] AsyncEngineArgs:")
+            pprint.pprint(asdict(engine_args), width=100, sort_dicts=True)
 
         # Capture vLLM's "Maximum concurrency" from stdout/stderr during initialization
         # vLLM v1 runs EngineCore in a subprocess, so logs go to stdout/stderr
