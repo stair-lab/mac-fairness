@@ -35,65 +35,108 @@ _grid:
   # Run with --rep N to repeat the entire grid N times with different timestamps
   zip:
     # ... RTX A4000 (16GB)
+    # _model_specific_zipped_config:
+    # # --> Qwen/Qwen2.5-1.5B-Instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen25-1.5b_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: Qwen/Qwen2.5-1.5B-Instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+    #   retry_config.max_retries: 5
+    # # --> Qwen/Qwen2.5-3B-Instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen25-3b_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: Qwen/Qwen2.5-3B-Instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+    #   retry_config.max_retries: 5
+    # # --> Qwen/Qwen3-4B-Instruct-2507
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen3-4b_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: Qwen/Qwen3-4B-Instruct-2507
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+    #   retry_config.max_retries: 5
+    # # --> google/gemma-2-2b-it
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_gemma2-2b_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: google/gemma-2-2b-it
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+    #   retry_config.max_retries: 15
+    # # --> meta-llama/Llama-3.2-1B-Instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama32-1b_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-1B-Instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+    #   retry_config.max_retries: 25
+    # # --> meta-llama/Llama-3.2-3B-Instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama32-3b_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-3B-Instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+    #   retry_config.max_retries: 25
+    # # --> microsoft/Phi-3-mini-128k-instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi3-mini-128k_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: microsoft/Phi-3-mini-128k-instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
+    #   retry_config.max_retries: 15
+    # # --> microsoft/Phi-3.5-mini-instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi35-mini_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: microsoft/Phi-3.5-mini-instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
+    #   retry_config.max_retries: 15
+    # # --> microsoft/Phi-4-mini-instruct
+    # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi4-mini_1agent_as-ai_v2025-12-10"
+    #   model_definitions.llm_0.model_path: microsoft/Phi-4-mini-instruct
+    #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+    #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
+    #   retry_config.max_retries: 15
+
+    # _hpc_node_specific_zipped_config:
+    #   - model_definitions.llm_0.vllm_config.gpu_memory_utilization: 0.85
+    #     model_definitions.llm_0.vllm_config.enforce_eager: true
+
+    # ... H200 (140GB)
     _model_specific_zipped_config:
-      # # --> Qwen/Qwen2.5-1.5B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen25-1.5b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: Qwen/Qwen2.5-1.5B-Instruct
+      # # --> google/gemma-2-27b-it
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_gemma2-27b_1agent_as-ai_v2025-12-10"
+      #   model_definitions.llm_0.model_path: google/gemma-2-27b-it
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       #   retry_config.max_retries: 5
-      # # --> Qwen/Qwen2.5-3B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen25-3b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: Qwen/Qwen2.5-3B-Instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-      #   retry_config.max_retries: 5
-      # # --> Qwen/Qwen3-4B-Instruct-2507
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen3-4b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: Qwen/Qwen3-4B-Instruct-2507
+      # --> google/gemma-2-9b-it
+      - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_gemma2-9b_1agent_as-ai_v2025-12-10"
+        model_definitions.llm_0.model_path: google/gemma-2-9b-it
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
+        model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+        retry_config.max_retries: 5
+      # # --> meta-llama/Llama-3.1-70B-Instruct
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama31-70b_1agent_as-ai_v2025-12-10"
+      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.1-70B-Instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       #   retry_config.max_retries: 5
-      # # --> google/gemma-2-2b-it
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_gemma2-2b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: google/gemma-2-2b-it
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-      #   retry_config.max_retries: 15
-      # # --> meta-llama/Llama-3.2-1B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama32-1b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-1B-Instruct
+      # # --> meta-llama/Llama-3.1-8B-Instruct
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama31-8b_1agent_as-ai_v2025-12-10"
+      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.1-8B-Instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-      #   retry_config.max_retries: 25
-      # # --> meta-llama/Llama-3.2-3B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama32-3b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-3B-Instruct
+      #   retry_config.max_retries: 5
+      # # --> meta-llama/Llama-3.3-70B-Instruct
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama33-70b_1agent_as-ai_v2025-12-10"
+      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.3-70B-Instruct
+      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+      #   retry_config.max_retries: 5
+      # # --> mistralai/Mistral-7B-Instruct-v0.3
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_mistral03-7b_1agent_as-ai_v2025-12-10"
+      #   model_definitions.llm_0.model_path: mistralai/Mistral-7B-Instruct-v0.3
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-      #   retry_config.max_retries: 25
-      # # --> microsoft/Phi-3-mini-128k-instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi3-mini-128k_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: microsoft/Phi-3-mini-128k-instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
-      #   retry_config.max_retries: 15
-      # # --> microsoft/Phi-3.5-mini-instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi35-mini_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: microsoft/Phi-3.5-mini-instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
-      #   retry_config.max_retries: 15
-      # --> microsoft/Phi-4-mini-instruct
-      - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi4-mini_1agent_as-ai_v2025-12-10"
-        model_definitions.llm_0.model_path: microsoft/Phi-4-mini-instruct
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-        model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
-        retry_config.max_retries: 15
+      #   retry_config.max_retries: 5
 
     _hpc_node_specific_zipped_config:
-      - model_definitions.llm_0.vllm_config.gpu_memory_utilization: 0.85
-        model_definitions.llm_0.vllm_config.enforce_eager: true
+      - model_definitions.llm_0.vllm_config.gpu_memory_utilization: 0.95
+        model_definitions.llm_0.vllm_config.enforce_eager: false
 
 # Base experiment configuration (used as template for all combinations)
 experiment_metadata:

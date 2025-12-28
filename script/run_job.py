@@ -258,7 +258,7 @@ def _run_task_manifest_resume(
                 info_print(f"Task {idx + 1} completed successfully")
             else:
                 failed += 1
-                info_print(f"Task {idx + 1} completed with failures")
+                info_print(f"Task {idx + 1} completed with some questions not succeeded")
 
         except Exception as e:
             failed += 1
@@ -270,7 +270,7 @@ def _run_task_manifest_resume(
 
     # Print summary
     info_print("=" * 60, prefix=False)
-    info_print(f"Rep run resume complete: {successful} succeeded, {failed} failed")
+    info_print(f"Rep run resume complete: {successful} succeeded, {failed} not fully succeeded")
     info_print("=" * 60, prefix=False)
 
     # Delete old grid manifests only if all tasks succeeded, otherwise print resume command
@@ -351,7 +351,7 @@ def run_grid_experiments(args: argparse.Namespace) -> int:
             else:
                 total_fail += 1
         info_print("=" * 60, prefix=False)
-        info_print(f"All repetitions complete: {total_success} succeeded, {total_fail} failed")
+        info_print(f"All repetitions complete: {total_success} succeeded, {total_fail} not fully succeeded")
         info_print("=" * 60, prefix=False)
 
         # Delete the grid config snapshot after all repetitions complete (if all succeeded)
@@ -709,15 +709,15 @@ def _run_single_grid(
             else:
                 # Some questions failed - leave status as "started" for resume
                 failed += 1
-                failed_configs.append((i, exp_name, "Some questions failed"))
-                info_print(f"Task {config_num} completed with failures (some questions did not succeed)")
+                failed_configs.append((i, exp_name, "Some questions not succeeded"))
+                info_print(f"Task {config_num} completed with some questions not succeeded")
 
         except Exception as e:
             # Task crashed - leave status as "started" so it can be resumed
             failed += 1
             error_msg = f"{type(e).__name__}: {e}"
             failed_configs.append((i, exp_name, error_msg))
-            info_print(f"Task {config_num} failed: {error_msg}")
+            info_print(f"Task {config_num} not fully succeeded: {error_msg}")
             if is_debug_enabled():
                 import traceback
                 traceback.print_exc()

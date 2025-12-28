@@ -42,31 +42,34 @@ hf auth login --token "$HF_TOKEN"  # skipping for now --add-to-git-credential
 # - Others: No explicit recommendations in model cards
 
 models=(
-    # === Google Gemma (newest first) ===
-    "google/gemma-2-27b-it"
-    "google/gemma-2-9b-it"
-    "google/gemma-2-2b-it"
+    # === Alibaba Qwen ===
+    # "Qwen/Qwen3-4B-Instruct-2507"
+    # "Qwen/Qwen2.5-1.5B-Instruct"
+    # "Qwen/Qwen2.5-3B-Instruct"
 
-    # === Meta Llama (newest first) ===
+    # === Google Gemma ===
+    # "google/gemma-2-27b-it"
+    # "google/gemma-2-9b-it"
+    # "google/gemma-2-2b-it"
+
+    # === Meta Llama ===
     # "meta-llama/Llama-3.3-70B-Instruct"
-    "meta-llama/Llama-3.2-3B-Instruct"
-    "meta-llama/Llama-3.2-1B-Instruct"
+    # "meta-llama/Llama-3.2-3B-Instruct"
+    # "meta-llama/Llama-3.2-1B-Instruct"
     # "meta-llama/Llama-3.1-70B-Instruct"
-    "meta-llama/Llama-3.1-8B-Instruct"
+    # "meta-llama/Llama-3.1-8B-Instruct"
 
-    # === Microsoft Phi (newest first) ===
-    "microsoft/Phi-4-mini-instruct"
-    "microsoft/Phi-3.5-mini-instruct"
-    "microsoft/Phi-3-mini-128k-instruct"
-    "microsoft/Phi-3-mini-4k-instruct"
+    # === Microsoft Phi ===
+    # "microsoft/Phi-4-mini-instruct"
+    # "microsoft/Phi-3.5-mini-instruct"
+    # "microsoft/Phi-3-mini-128k-instruct"
+    # "microsoft/Phi-3-mini-4k-instruct"
 
     # === Mistral AI ===
+    "mistralai/Ministral-3-14B-Instruct-2512"
+    "mistralai/Ministral-3-8B-Instruct-2512"
+    # "mistralai/Ministral-3-3B-Instruct-2512"
     "mistralai/Mistral-7B-Instruct-v0.3"
-
-    # === Alibaba Qwen (newest first) ===
-    "Qwen/Qwen3-4B-Instruct-2507"
-    "Qwen/Qwen2.5-3B-Instruct"
-    "Qwen/Qwen2.5-1.5B-Instruct"
 )
 
 echo "============================================================"
