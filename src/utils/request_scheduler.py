@@ -80,11 +80,42 @@ class LiveStatusDisplay:
         global _live_display_instance
         if not self.enabled or self.initialized:
             return
-        # Print empty lines to reserve space
-        print("\n" * self.display_lines, end="")
+        # Print the initial frame with empty data (reserves space and draws header)
+        # This prevents race condition where external prints happen between
+        # reserving space and the first update() call
         print(self.HIDE_CURSOR, end="", flush=True)
+        self._print_initial_frame()
         self.initialized = True
         _live_display_instance = self
+
+    def _print_initial_frame(self) -> None:
+        """Print the initial display frame with placeholder content."""
+        lines = []
+        lines.append(f"{'═' * self.TOTAL_WIDTH}")
+        lines.append(f" Progress: 0/0 conversations | In-Flight: 0/0 | Pre-Dep: 0 | Pending: 0")
+        lines.append(f"{'─' * self.TOTAL_WIDTH}")
+        lines.append(
+            f" {'PRE-DEPARTURE (ready to fly)':<{self.COLUMN_WIDTH - 1}}"
+            f" │ {'PENDING (blocked on deps)':<{self.COLUMN_WIDTH - 1}}"
+        )
+        lines.append(f"{'─' * self.TOTAL_WIDTH}")
+
+        # Empty rows
+        for _ in range(self.QUEUE_ROWS):
+            lines.append(f"{'':<{self.COLUMN_WIDTH}} │ {'':<{self.COLUMN_WIDTH}}")
+
+        # Footer
+        lines.append(f"{'═' * self.TOTAL_WIDTH}")
+
+        # Pad to fixed height
+        while len(lines) < self.display_lines:
+            lines.append("")
+
+        # Print all lines (this reserves the space)
+        for line in lines[:self.display_lines]:
+            padded_line = line[:self.TOTAL_WIDTH].ljust(self.TOTAL_WIDTH)
+            print(padded_line)
+        print(end="", flush=True)
 
     def cleanup(self) -> None:
         """Restore terminal state."""
@@ -1187,6 +1218,8 @@ class RequestScheduler:
 
             # Initialize live display AFTER all startup messages are printed
             # This ensures the display area is reserved at the correct position
+            # Small delay to let vLLM subprocess finish its async logging
+            await asyncio.sleep(0.5)
             self.live_display.initialize()
 
             # Run the scheduler loop

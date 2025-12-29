@@ -1789,6 +1789,23 @@ class GridManifestManager:
             pass
         return False
 
+    def _has_pending_tasks(self, manifest_path: Path) -> bool:
+        """Check if a manifest has any pending (non-succeeded) tasks.
+
+        Args:
+            manifest_path: Path to the grid manifest file
+
+        Returns:
+            True if manifest has pending tasks, False otherwise
+        """
+        try:
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+            pending, _, _ = self._extract_pending_from_manifest(manifest)
+            return len(pending) > 0
+        except (json.JSONDecodeError, OSError):
+            return False
+
     def load_all_manifests_for_resume(
         self, grid_config_path: str
     ) -> Optional[Tuple[List[Dict[str, Any]], List[Path]]]:

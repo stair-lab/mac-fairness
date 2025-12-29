@@ -4,26 +4,28 @@
 This is the main entry point for running experiments locally or on compute clusters.
 
 Usage:
-    # Run single task
-    uv run python script/run_job.py config/dev_ollama/llama32_1b_3agent_..._scratch.yaml
-
     # Run grid job (parameter sweep with multiple tasks)
     uv run python script/run_job.py config/my_exp/my_grid_config.yaml --grid
 
-    # Dry run (validate config and show what would run without executing)
-    uv run python script/run_job.py config/my_exp/my_config.yaml --dry-run
+    # Run with repetitions (same grid config, different timestamps)
+    uv run python script/run_job.py config/my_exp/my_grid_config.yaml --grid --rep 5
 
-    # Dry run grid job (show all expanded configurations)
+    # Dry run (validate config and show what would run without executing)
     uv run python script/run_job.py config/my_exp/my_grid_config.yaml --grid --dry-run
 
-    # Add env var setting
-    TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 MAC_FAIRNESS_LIVE_STATUS=1 uv run python ...
+    # Resume: continue the most recently modified incomplete grid manifest
+    # (processes one rep at a time, run repeatedly to complete all reps)
+    uv run python script/run_job.py bookkeeping/_grid_config_snapshot/{snapshot}.yaml --grid --resume
 
-    TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=1 OMP_NUM_THREADS=4 MAC_FAIRNESS_DEBUG_FLAG=1 uv run python ...
+    # Repair: retry all failed questions across ALL task manifests for a snapshot
+    # (scans all reps and retries null questions in each)
+    uv run python script/run_job.py bookkeeping/_grid_config_snapshot/{snapshot}.yaml --grid --repair
 
 Environment Variables:
     MAC_FAIRNESS_WORKSPACE - Project root directory (required)
     MAC_FAIRNESS_EXPERIMENT_ROOT - Override experiment output directory (default: ./experiment)
+    MAC_FAIRNESS_DEBUG_FLAG - Enable debug output
+    MAC_FAIRNESS_LIVE_STATUS - Enable live status display
 """
 
 import argparse
@@ -172,30 +174,71 @@ def signal_handler(signum: int, _frame) -> None:
     os._exit(128 + signum)
 
 
-def _run_task_manifest_resume(
-    incomplete_task_manifests: List[Tuple[Path, List[str], Dict[str, Dict[str, Any]]]],
-    old_grid_manifest_paths: List[Path],
-    grid_config_snapshot_path: str,
-) -> int:
-    """Resume incomplete questions from task manifests (for rep run resume).
+def run_repair(args: argparse.Namespace) -> int:
+    """Repair failed questions across all task manifests for a grid config snapshot.
 
-    This function handles resume for rep runs where multiple grid manifests share
-    the same grid config snapshot. Instead of re-running grid expansion, it directly
-    processes each task manifest with null questions.
+    Unlike --resume which processes one grid manifest at a time, --repair scans
+    ALL task manifests that reference the grid config snapshot and retries any
+    questions that didn't succeed. This is useful for fixing up partially failed
+    runs across multiple repetitions.
 
     Args:
-        incomplete_task_manifests: List of (manifest_path, null_question_ids, all_questions)
-            tuples from find_all_task_manifests_by_grid_snapshot
-        old_grid_manifest_paths: Grid manifest paths to delete after successful completion
-        grid_config_snapshot_path: Path to the grid config snapshot (for resume command)
+        args: Parsed command-line arguments (config should be grid config snapshot path)
 
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
-    global _grid_resume_path
-    _grid_resume_path = grid_config_snapshot_path
+    config_path = Path(args.config)
 
-    info_print(f"Resuming {len(incomplete_task_manifests)} task manifest(s) with incomplete questions...")
+    # Validate that we're using a grid config snapshot path
+    config_parent = config_path.parent.name
+    config_grandparent = config_path.parent.parent.name if config_path.parent.parent else ""
+    is_snapshot_path = (config_grandparent == "bookkeeping" and config_parent == "_grid_config_snapshot")
+    if not is_snapshot_path:
+        info_print("Error: --repair requires using the grid config snapshot path")
+        info_print("  Expected: bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml")
+        info_print(f"  Got: {config_path}")
+        info_print("To find your snapshot, check: ls bookkeeping/_grid_config_snapshot/")
+        return 1
+
+    # Find all task manifests with incomplete questions
+    bookkeeping_manager = BookkeepingManager()
+    incomplete_task_manifests = bookkeeping_manager.find_all_task_manifests_by_grid_snapshot(
+        str(config_path)
+    )
+
+    if not incomplete_task_manifests:
+        info_print("No task manifests with incomplete questions found.")
+        info_print("All questions have succeeded, or no tasks have been run yet.")
+        return 0
+
+    # Count total null questions
+    total_null = sum(len(null_ids) for _, null_ids, _ in incomplete_task_manifests)
+    info_print(f"Found {len(incomplete_task_manifests)} task manifest(s) with {total_null} incomplete question(s)")
+
+    # Handle dry-run
+    if args.dry_run:
+        info_print("-" * 60, prefix=False)
+        info_print("Task manifests to repair:", prefix=False)
+        for manifest_path, null_question_ids, all_questions in incomplete_task_manifests:
+            exp_dir = manifest_path.parent.parent
+            exp_name = exp_dir.name
+            benchmark = exp_dir.parent.name
+            succeeded_count = sum(
+                1 for q in all_questions.values() if q.get("status") == "succeeded"
+            )
+            total = len(all_questions)
+            info_print(f"  {benchmark}/{exp_name}", prefix=False)
+            info_print(f"    ├── Progress: {succeeded_count}/{total} succeeded", prefix=False)
+            info_print(f"    └── Null questions: {len(null_question_ids)}", prefix=False)
+        info_print(f"Dry run complete. {total_null} questions would be retried.")
+        return 0
+
+    # Set up signal handler
+    global _grid_resume_path
+    _grid_resume_path = str(config_path)
+
+    info_print(f"Repairing {len(incomplete_task_manifests)} task manifest(s)...")
 
     successful = 0
     failed = 0
@@ -203,7 +246,6 @@ def _run_task_manifest_resume(
 
     for idx, (manifest_path, null_question_ids, all_questions) in enumerate(incomplete_task_manifests):
         # Extract experiment info from manifest path
-        # Path structure: {exp_root}/{benchmark}/{experiment}/task_manifest/{timestamp}_{job_task_id}.json
         exp_dir = manifest_path.parent.parent
         exp_name = exp_dir.name
         benchmark = exp_dir.parent.name
@@ -270,30 +312,12 @@ def _run_task_manifest_resume(
 
     # Print summary
     info_print("=" * 60, prefix=False)
-    info_print(f"Rep run resume complete: {successful} succeeded, {failed} not fully succeeded")
+    info_print(f"Repair complete: {successful} task(s) fully repaired, {failed} still have issues")
     info_print("=" * 60, prefix=False)
 
-    # Delete old grid manifests only if all tasks succeeded, otherwise print resume command
     if failed > 0:
-        info_print(f"\nTo resume this grid job, run:", prefix=False)
-        info_print(f"[ENV_VARS] python script/run_job.py {grid_config_snapshot_path} --grid --resume", prefix=False)
-    elif old_grid_manifest_paths:
-        for old_path in old_grid_manifest_paths:
-            try:
-                if old_path.exists():
-                    old_path.unlink()
-                    info_print(f"Deleted old grid manifest: {old_path.name}")
-            except OSError:
-                pass
-
-        # Also delete the grid config snapshot if all succeeded
-        resolved_snapshot = resolve_path(grid_config_snapshot_path, project_root)
-        try:
-            if Path(resolved_snapshot).exists():
-                Path(resolved_snapshot).unlink()
-                info_print(f"Deleted grid config snapshot: {Path(resolved_snapshot).name}")
-        except OSError:
-            pass
+        info_print(f"\nTo retry remaining failures, run:", prefix=False)
+        info_print(f"[ENV_VARS] python script/run_job.py {config_path} --grid --repair", prefix=False)
 
     # Cleanup resources
     if backend:
@@ -415,6 +439,8 @@ def _run_single_grid(
     bookkeeping_manager = BookkeepingManager()
     pending_indices: Optional[list] = None
     started_task_info: Dict[int, Dict[str, str]] = {}
+    succeeded_task_info: Dict[int, Dict[str, Any]] = {}
+    resume_manifest_path: Optional[Path] = None
 
     # Check for resume mode
     old_grid_manifest_paths: List[Path] = []
@@ -431,45 +457,9 @@ def _run_single_grid(
             print()
             return 1
 
-        # First, try to find all task manifests with null questions (for rep run resume)
-        # This scans all task manifests that reference this grid config snapshot
-        incomplete_task_manifests = bookkeeping_manager.find_all_task_manifests_by_grid_snapshot(
-            str(config_path)
-        )
-
-        if incomplete_task_manifests:
-            # Rep run resume: found task manifests with null questions
-            # We'll handle these directly instead of using grid manifest logic
-            info_print(f"Found {len(incomplete_task_manifests)} task manifest(s) with incomplete questions")
-
-            # Load all grid manifests to delete them after resume
-            all_manifests_result = grid_manifest_manager.load_all_manifests_for_resume(str(config_path))
-            if all_manifests_result:
-                _, old_grid_manifest_paths = all_manifests_result
-
-            # Handle dry-run for rep run resume
-            if args.dry_run:
-                info_print("-" * 60, prefix=False)
-                info_print("Task manifests to resume:", prefix=False)
-                for manifest_path, null_question_ids, all_questions in incomplete_task_manifests:
-                    succeeded_count = sum(
-                        1 for q in all_questions.values() if q.get("status") == "succeeded"
-                    )
-                    total = len(all_questions)
-                    info_print(f"  {manifest_path.parent.parent.parent.name}/{manifest_path.parent.parent.name}/{manifest_path.parent.name}", prefix=False)
-                    info_print(f"    ├── Progress: {succeeded_count}/{total} succeeded", prefix=False)
-                    info_print(f"    └── Null questions: {len(null_question_ids)}", prefix=False)
-                info_print(f"Dry run complete. {len(incomplete_task_manifests)} task manifests would be resumed.")
-                return 0
-
-            # Run resume for each task manifest with null questions
-            return _run_task_manifest_resume(
-                incomplete_task_manifests,
-                old_grid_manifest_paths,
-                str(config_path),
-            )
-
         # Find all grid manifests matching this snapshot
+        # Grid manifest is authoritative - task manifests are only used for tasks
+        # that the grid manifest tracks as "started" (to find null questions)
         all_manifests_result = grid_manifest_manager.load_all_manifests_for_resume(str(config_path))
 
         if all_manifests_result is None:
@@ -479,30 +469,38 @@ def _run_single_grid(
 
         all_started_tasks, old_grid_manifest_paths = all_manifests_result
 
-        # Merge pending info from all manifests
-        # Use the most recent manifest's structure for pending_indices and started_task_info
-        # (all manifests have the same task structure, just different statuses)
-        pending_indices = []
-        started_task_info = {}
-        succeeded_task_info = {}
-
-        # Process each manifest and merge results
-        for manifest_path in old_grid_manifest_paths:
+        # Find the LATEST incomplete grid manifest to resume (most likely the one interrupted)
+        # Each rep run has its own grid manifest - resume one at a time
+        # Sort by modification time (most recent first)
+        sorted_manifests = sorted(
+            old_grid_manifest_paths,
+            key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            reverse=True
+        )
+        for manifest_path in sorted_manifests:
             try:
                 import json
                 with open(manifest_path, "r") as f:
                     manifest = json.load(f)
                 p, s, succ = grid_manifest_manager._extract_pending_from_manifest(manifest)
-                # Merge: a task is pending if it's pending in ANY manifest
-                for idx in p:
-                    if idx not in pending_indices and idx not in succeeded_task_info:
-                        pending_indices.append(idx)
-                started_task_info.update(s)
-                succeeded_task_info.update(succ)
+                if p:  # This manifest has pending work
+                    # Use the latest incomplete manifest for resume
+                    resume_manifest_path = manifest_path
+                    pending_indices = p
+                    started_task_info = s
+                    succeeded_task_info = succ
+                    break  # Found the latest incomplete one
             except (json.JSONDecodeError, OSError):
                 continue
 
-        pending_indices.sort()
+        # Count how many manifests have pending work (for user info)
+        incomplete_manifest_count = sum(
+            1 for mp in old_grid_manifest_paths
+            if mp != resume_manifest_path and grid_manifest_manager._has_pending_tasks(mp)
+        )
+
+        if pending_indices:
+            pending_indices.sort()
 
         if not pending_indices:
             info_print(f"All configurations already completed. Nothing to resume.")
@@ -512,22 +510,29 @@ def _run_single_grid(
         info_print(f"Resuming: {len(pending_indices)} pending of {len(expanded_configs)} configurations")
         if started_count > 0:
             info_print(f"  ({started_count} were previously started, will check task manifests for partial progress)")
+        if incomplete_manifest_count > 0:
+            info_print(f"  ({incomplete_manifest_count} other grid manifest(s) also have pending work)")
+
+        # For resume, we continue using the existing manifest instead of creating a new one
+        # Set old_grid_manifest_paths to only delete completed manifests, not the one we're resuming
+        old_grid_manifest_paths = [mp for mp in old_grid_manifest_paths if mp != resume_manifest_path]
 
     # Handle dry-run for resume mode with tree output
     if args.dry_run:
         info_print("-" * 60, prefix=False)
         info_print("Configurations to resume:", prefix=False)
         for i in pending_indices:
-            config, _ = expanded_configs[i]
-            exp_name = config["experiment_metadata"]["experiment_name"]
-
             if i in started_task_info:
-                # Started task - get detailed info about null questions
+                # Started task - use experiment_name from grid manifest (has correct timestamp)
                 run_info = started_task_info[i]
+                exp_name = run_info["experiment_name"]
+                benchmark = run_info["benchmark_subcategory"]
+                # Note: don't pass expected_config - the grid manifest already has the
+                # correct experiment_name/benchmark, and the current expanded config may
+                # have a different timestamp from when the task was originally started
                 result = bookkeeping_manager.find_task_manifest_and_get_null_questions(
-                    experiment_name=run_info["experiment_name"],
-                    benchmark_subcategory=run_info["benchmark_subcategory"],
-                    expected_config=config,
+                    experiment_name=exp_name,
+                    benchmark_subcategory=benchmark,
                 )
 
                 if result is not None:
@@ -539,7 +544,7 @@ def _run_single_grid(
                     ) if all_questions else 0
                     total = len(all_questions) if all_questions else 0
 
-                    info_print(f"  [{i}] {exp_name} (started)", prefix=False)
+                    info_print(f"  [{i}] {benchmark}/{exp_name} (started)", prefix=False)
                     info_print(f"      ├── Progress: {succeeded_count}/{total} succeeded", prefix=False)
                     info_print(f"      ├── Null questions: {null_count}", prefix=False)
 
@@ -554,35 +559,51 @@ def _run_single_grid(
                             info_print(f"      │   └── ... and {len(null_question_ids) - 5} more", prefix=False)
                 else:
                     # No task manifest found
-                    info_print(f"  [{i}] {exp_name} (started, no manifest found)", prefix=False)
+                    info_print(f"  [{i}] {benchmark}/{exp_name} (started, no manifest found)", prefix=False)
             else:
-                # Pending task - not started yet
-                info_print(f"  [{i}] {exp_name} (pending)", prefix=False)
+                # Pending task - use experiment_name from current expanded config
+                config, _ = expanded_configs[i]
+                exp_name = config["experiment_metadata"]["experiment_name"]
+                benchmark = config["experiment_metadata"]["benchmark_subcategory"]
+                info_print(f"  [{i}] {benchmark}/{exp_name} (pending)", prefix=False)
 
         info_print(f"Dry run complete. {len(pending_indices)} configurations would be resumed.")
         return 0
 
-    # Create new manifest (always - fresh or with carried-over pending status)
-    if pending_indices is None:
-        pending_indices = list(range(len(expanded_configs)))
-        succeeded_task_info = {}  # Fresh run, no processed runs to carry over
-
-    # Use the submission_timestamp passed in (already set for runtime placeholder substitution)
-    # For rep runs, reuse the existing_grid_snapshot_path instead of creating a new one
-    manifest_path, _grid_config_snapshot_path = grid_manifest_manager.save_grid_manifest(
-        str(config_path), expanded_configs, submission_timestamp,
-        is_resume=args.resume, succeeded_task_info=succeeded_task_info,
-        existing_grid_snapshot_path=existing_grid_snapshot_path
-    )
-
-    # Delete old grid manifests AFTER new one is created (atomic create-then-delete)
-    for old_path in old_grid_manifest_paths:
+    # Create new manifest or reuse existing one for resume
+    if args.resume and resume_manifest_path is not None:
+        # Resume: reuse the existing manifest, don't create a new one
+        manifest_path = resume_manifest_path
+        # Get the grid config snapshot path from the existing manifest
         try:
-            if old_path.exists():
-                old_path.unlink()
-                info_print(f"Deleted old grid manifest: {old_path.name}")
-        except OSError:
-            pass
+            import json
+            with open(manifest_path, "r") as f:
+                manifest_data = json.load(f)
+            _grid_config_snapshot_path = manifest_data.get("grid_config_snapshot_path", str(config_path))
+        except (json.JSONDecodeError, OSError):
+            _grid_config_snapshot_path = str(config_path)
+
+        # Delete other completed manifests (not the one we're resuming)
+        for old_path in old_grid_manifest_paths:
+            try:
+                if old_path.exists() and not grid_manifest_manager._has_pending_tasks(old_path):
+                    old_path.unlink()
+                    info_print(f"Deleted completed grid manifest: {old_path.name}")
+            except OSError:
+                pass
+    else:
+        # Fresh run: create new manifest
+        if pending_indices is None:
+            pending_indices = list(range(len(expanded_configs)))
+            succeeded_task_info = {}  # Fresh run, no processed runs to carry over
+
+        # Use the submission_timestamp passed in (already set for runtime placeholder substitution)
+        # For rep runs, reuse the existing_grid_snapshot_path instead of creating a new one
+        manifest_path, _grid_config_snapshot_path = grid_manifest_manager.save_grid_manifest(
+            str(config_path), expanded_configs, submission_timestamp,
+            is_resume=False, succeeded_task_info=succeeded_task_info,
+            existing_grid_snapshot_path=existing_grid_snapshot_path
+        )
 
     # Set module-level variable for signal handler to print resume command
     # (Process-local: only affects this Python process, not others)
@@ -626,12 +647,12 @@ def _run_single_grid(
             run_info = started_task_info[i]
             started_exp_name = run_info["experiment_name"]
             started_benchmark = run_info["benchmark_subcategory"]
-            # Pass expected config to validate that the task manifest's config_snapshot
-            # matches this configuration (important when multiple configs share experiment_name)
+            # Note: don't pass expected_config - the grid manifest already has the
+            # correct experiment_name/benchmark, and the current expanded config may
+            # have a different timestamp from when the task was originally started
             result = bookkeeping_manager.find_task_manifest_and_get_null_questions(
                 experiment_name=started_exp_name,
                 benchmark_subcategory=started_benchmark,
-                expected_config=config,
             )
             if result is None:
                 # Task was marked started but no manifest found - run fresh
@@ -739,10 +760,25 @@ def _run_single_grid(
             info_print(f"  [{idx}] {name}: {err}", prefix=False)
     info_print("=" * 60, prefix=False)
 
-    # Delete manifest (and snapshot if not a rep run) only if all tasks succeeded
+    # Delete manifest only if all tasks succeeded
+    # For snapshot: only delete if this was NOT a rep run (existing_grid_snapshot_path is None)
+    # AND there are no other incomplete manifests sharing this snapshot
     if manifest_path:
-        # For rep runs, don't delete snapshot - it's shared across repetitions
-        delete_snapshot = existing_grid_snapshot_path is None
+        # Check if there are other manifests with pending work
+        other_incomplete = False
+        if args.resume:
+            # Re-scan to see if any other manifests have pending work
+            all_manifests_result = grid_manifest_manager.load_all_manifests_for_resume(str(config_path))
+            if all_manifests_result:
+                _, all_paths = all_manifests_result
+                for mp in all_paths:
+                    if mp != manifest_path and grid_manifest_manager._has_pending_tasks(mp):
+                        other_incomplete = True
+                        break
+
+        # For rep runs (existing_grid_snapshot_path is set), never delete snapshot here
+        # For resume, only delete snapshot if no other incomplete manifests
+        delete_snapshot = (existing_grid_snapshot_path is None) and not other_incomplete
         grid_manifest_manager.delete_if_complete(manifest_path, delete_snapshot=delete_snapshot)
 
     # Cleanup resources once at the end
@@ -767,19 +803,31 @@ def main() -> int:
         epilog="""
 Examples:
   # Run a grid experiment
-  CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 \\
-    python script/run_job.py config/my_exp/my_grid_config.yaml --grid
+  python script/run_job.py config/my_exp/my_grid_config.yaml --grid
+
+  # Run with 5 repetitions (different timestamps each rep)
+  python script/run_job.py config/my_exp/my_grid_config.yaml --grid --rep 5
 
   # Dry run to see expanded configurations
   python script/run_job.py config/my_exp/my_grid_config.yaml --grid --dry-run
 
-  # Resume an interrupted grid run
-  CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 MAC_FAIRNESS_LIVE_STATUS=1 \\
-    python script/run_job.py bookkeeping/_grid_config_snapshot/{config}_{timestamp}.yaml --grid --resume
+  # Resume: continue the most recently modified incomplete grid manifest
+  # Picks the latest incomplete rep and finishes it. Run again for next rep.
+  python script/run_job.py bookkeeping/_grid_config_snapshot/{snapshot}.yaml --grid --resume
+
+  # Repair: retry failed questions across ALL reps at once
+  # Scans all task manifests and retries any null questions.
+  python script/run_job.py bookkeeping/_grid_config_snapshot/{snapshot}.yaml --grid --repair
+
+Resume vs Repair:
+  --resume: Processes ONE rep at a time (the most recently modified incomplete one).
+            Run repeatedly to complete all reps. Grid manifest is authoritative.
+  --repair: Processes ALL reps at once. Scans all task manifests matching the
+            snapshot and retries any questions that didn't succeed.
 
 Environment Variables:
   MAC_FAIRNESS_DEBUG_FLAG - Enable debug output
-  MAC_FAIRNESS_EXPERIMENT_ROOT - Override experiment output directory (default: ./experiment)
+  MAC_FAIRNESS_EXPERIMENT_ROOT - Override experiment output directory
         """,
     )
 
@@ -803,7 +851,13 @@ Environment Variables:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Resume a grid run from the most recent manifest",
+        help="Resume the most recently modified incomplete rep (run repeatedly to finish all reps)",
+    )
+
+    parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="Retry all failed questions across ALL reps at once",
     )
 
     parser.add_argument(
@@ -817,9 +871,20 @@ Environment Variables:
     args = parser.parse_args()
 
     # Validate argument combinations
+    if args.resume and args.repair:
+        info_print("Error: --resume and --repair cannot be used together")
+        info_print("  --resume: continue interrupted grid run (one manifest at a time)")
+        info_print("  --repair: retry failed questions across all task manifests")
+        return 1
+
     if args.resume and args.rep > 1:
         info_print("Error: --resume and --rep cannot be used together")
         info_print("  --resume continues an interrupted run, --rep starts fresh repetitions")
+        return 1
+
+    if args.repair and args.rep > 1:
+        info_print("Error: --repair and --rep cannot be used together")
+        info_print("  --repair retries failed questions, --rep starts fresh repetitions")
         return 1
 
     if args.rep < 1:
@@ -830,8 +895,11 @@ Environment Variables:
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Grid config is the only entry point
-    return run_grid_experiments(args)
+    # Dispatch to appropriate handler
+    if args.repair:
+        return run_repair(args)
+    else:
+        return run_grid_experiments(args)
 
 
 if __name__ == "__main__":

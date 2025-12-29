@@ -12,9 +12,13 @@ import select
 import sys
 import threading
 import time
+import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import uuid4
+
+# Suppress FutureWarning from mistral_common tokenizer (deprecated special token policy)
+warnings.filterwarnings("ignore", category=FutureWarning, module="mistral_common")
 
 from transformers import AutoTokenizer
 from vllm import SamplingParams
@@ -335,8 +339,6 @@ class AsyncVLLMAgent(BaseAgent):
         "enforce_eager": bool,
         "quantization": str,
         "gpu_device_ids": list,
-        "top_p": float,
-        "top_k": int,
         "attention_backend": str,
     }
 
@@ -436,7 +438,8 @@ class AsyncVLLMAgent(BaseAgent):
         # Store captured max concurrency for later use
         self._max_concurrency_from_log[self.model_path] = output_capture.max_concurrency
 
-        tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        # Load tokenizer with fallbacks for custom tokenizers (e.g., Mistral's tekken)
+        tokenizer = self._load_tokenizer()
         self._tokenizers[self.model_path] = tokenizer
 
         self._engines[self.model_path] = async_engine
@@ -456,6 +459,66 @@ class AsyncVLLMAgent(BaseAgent):
                 )
 
         info_print("AsyncLLMEngine initialized successfully")
+
+    def _load_tokenizer(self) -> Any:
+        """Load tokenizer with fallbacks for custom tokenizers.
+
+        Tries multiple approaches to handle custom tokenizers like Mistral's tekken:
+        1. MistralCommonBackend (transformers v5+)
+        2. mistral_common.tokens.tokenizers directly (for tekken tokenizer)
+        3. AutoTokenizer with trust_remote_code=True
+        4. AutoTokenizer without trust_remote_code
+
+        Returns:
+            Loaded tokenizer instance
+
+        Raises:
+            VLLMConfigError: If all tokenizer loading methods fail
+        """
+        # Try MistralCommonBackend first (transformers v5+ only)
+        try:
+            from transformers import MistralCommonBackend
+
+            tokenizer = MistralCommonBackend.from_pretrained(self.model_path)
+            info_print("Loaded tokenizer using MistralCommonBackend")
+            return tokenizer
+        except ImportError:
+            pass  # MistralCommonBackend not available (requires transformers v5+)
+        except Exception:
+            pass  # Model doesn't use MistralCommonBackend
+
+        # Try mistral_common directly (for Mistral models with tekken tokenizer)
+        try:
+            from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+
+            tokenizer = MistralTokenizer.from_hf_hub(self.model_path)
+            info_print("Loaded tokenizer using mistral_common.MistralTokenizer")
+            return tokenizer
+        except ImportError:
+            pass  # mistral_common not installed
+        except Exception:
+            pass  # Model doesn't use MistralTokenizer
+
+        # Try AutoTokenizer with trust_remote_code
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.model_path, trust_remote_code=True
+            )
+            return tokenizer
+        except Exception:
+            pass
+
+        # Try AutoTokenizer without trust_remote_code
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+            return tokenizer
+        except Exception as e:
+            raise VLLMConfigError(
+                f"Failed to load tokenizer for {self.model_path}. "
+                f"For Mistral models, try: uv pip install 'transformers>=5.0.0.rc1' "
+                f"or ensure mistral-common>=1.8.6 is installed. "
+                f"Error: {e}"
+            ) from e
 
     @staticmethod
     def _get_effective_max_num_seqs(
@@ -583,6 +646,8 @@ class AsyncVLLMAgent(BaseAgent):
 
         Handles models that don't support system roles (e.g., Gemma 2) by
         prepending the system message to the user message.
+
+        Also handles MistralTokenizer from mistral_common which uses a different API.
         """
         system_prompt = self._build_system_prompt()
 
@@ -597,13 +662,23 @@ class AsyncVLLMAgent(BaseAgent):
         if tokenizer is None:
             raise VLLMEngineNotInitializedError()
 
+        # Check if this is a MistralTokenizer from mistral_common
+        if self._is_mistral_tokenizer(tokenizer):
+            return self._build_prompt_mistral(tokenizer, system_prompt, user_message)
+
+        # Build kwargs for apply_chat_template (HuggingFace tokenizers)
+        chat_template_kwargs: Dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        if self.enable_thinking is not None:
+            chat_template_kwargs["enable_thinking"] = self.enable_thinking
+
         # Check if we already know this model doesn't support system role
         if self.model_path in self._no_system_role_models:
             combined_user_message = f"{system_prompt}\n\n{user_message}"
             messages = [{"role": "user", "content": combined_user_message}]
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            return tokenizer.apply_chat_template(messages, **chat_template_kwargs)
 
         # Try with system role first
         messages = [
@@ -612,9 +687,7 @@ class AsyncVLLMAgent(BaseAgent):
         ]
 
         try:
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            return tokenizer.apply_chat_template(messages, **chat_template_kwargs)
         except TemplateError as e:
             # Some models (e.g., Gemma 2) don't support system roles
             # Fall back to prepending system message to user message
@@ -630,9 +703,43 @@ class AsyncVLLMAgent(BaseAgent):
                     {"role": "user", "content": combined_user_message},
                 ]
                 return tokenizer.apply_chat_template(
-                    messages_no_system, tokenize=False, add_generation_prompt=True
+                    messages_no_system, **chat_template_kwargs
                 )
             raise
+
+    def _is_mistral_tokenizer(self, tokenizer: Any) -> bool:
+        """Check if tokenizer is a MistralTokenizer from mistral_common."""
+        try:
+            from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+
+            return isinstance(tokenizer, MistralTokenizer)
+        except ImportError:
+            return False
+
+    def _build_prompt_mistral(
+        self, tokenizer: Any, system_prompt: str, user_message: str
+    ) -> str:
+        """Build prompt using MistralTokenizer from mistral_common.
+
+        MistralTokenizer uses encode_chat_completion instead of apply_chat_template.
+        """
+        from mistral_common.protocol.instruct.messages import (
+            SystemMessage,
+            UserMessage,
+        )
+        from mistral_common.protocol.instruct.request import ChatCompletionRequest
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            UserMessage(content=user_message),
+        ]
+
+        request = ChatCompletionRequest(messages=messages)
+        tokenized = tokenizer.encode_chat_completion(request)
+
+        # Return the text representation for vLLM
+        # MistralTokenizer returns tokens, we need to decode them
+        return tokenizer.decode(tokenized.tokens)
 
     @classmethod
     async def start_engine(cls) -> None:
@@ -745,10 +852,14 @@ class AsyncVLLMAgent(BaseAgent):
             "temperature": temp,
             "max_tokens": max_tok,
         }
-        if "top_p" in self.vllm_config:
-            sampling_kwargs["top_p"] = self.vllm_config["top_p"]
-        if "top_k" in self.vllm_config:
-            sampling_kwargs["top_k"] = self.vllm_config["top_k"]
+        if self.top_p is not None:
+            sampling_kwargs["top_p"] = self.top_p
+        if self.top_k is not None:
+            sampling_kwargs["top_k"] = self.top_k
+        if self.min_p is not None:
+            sampling_kwargs["min_p"] = self.min_p
+        if self.presence_penalty is not None:
+            sampling_kwargs["presence_penalty"] = self.presence_penalty
 
         sampling_params = self._sampling_params_class(**sampling_kwargs)
         request_id = str(uuid4())

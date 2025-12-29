@@ -30,15 +30,8 @@ _grid:
         model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
         model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
         retry_config.max_retries: 5
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_debug_llama32-1b_1agent_as-ai_v2025-12-10"
-      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-1B-Instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-      #   retry_config.max_retries: 25
 
     _hpc_node_specific_zipped_config:
-      # - model_definitions.llm_0.vllm_config.gpu_memory_utilization: 0.95
-      #   model_definitions.llm_0.vllm_config.enforce_eager: false
       - model_definitions.llm_0.vllm_config.gpu_memory_utilization: 0.85
         model_definitions.llm_0.vllm_config.enforce_eager: true
 
@@ -84,7 +77,7 @@ model_definitions:
       gpu_memory_utilization: _ # will be overwritten by zip
       max_model_len: 1024
       dtype: auto # let vLLM auto-detect optimal dtype
-      max_num_seqs_upper_bound: 2 # sufficently large upperbound, actual value limited by KV cache
+      max_num_seqs_upper_bound: 256 # sufficently large upperbound, actual value limited by KV cache
       enable_prefix_caching: true
       attention_backend: _ # will be overwritten by zip
       enforce_eager: _ # will be overwritten by zip

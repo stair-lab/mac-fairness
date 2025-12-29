@@ -3,7 +3,7 @@
 import json
 import re
 from abc import ABC
-from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union, runtime_checkable
 
 from json_repair import repair_json
 
@@ -25,6 +25,11 @@ class AsyncAgentProtocol(Protocol):
     role: str
     temperature: float
     max_tokens: int
+    top_p: Optional[float]
+    top_k: Optional[int]
+    min_p: Optional[float]
+    presence_penalty: Optional[float]
+    enable_thinking: Optional[bool]
 
     async def generate(
         self,
@@ -77,9 +82,21 @@ class BaseAgent(ABC):
         self.if_as_human: bool = agent_config["if_as_human"]
         self.temperature: float = agent_config["temperature"]
         self.max_tokens: int = agent_config["max_tokens"]
+        self.top_p: Optional[float] = agent_config.get("top_p")
+        self.top_k: Optional[int] = agent_config.get("top_k")
+        self.min_p: Optional[float] = agent_config.get("min_p")
+        self.presence_penalty: Optional[float] = agent_config.get("presence_penalty")
+        self.enable_thinking: Optional[bool] = agent_config.get("enable_thinking")
 
         # Validate parameter ranges
-        self._validate_generation_params(self.temperature, self.max_tokens)
+        self._validate_generation_params(
+            self.temperature,
+            self.max_tokens,
+            self.top_p,
+            self.top_k,
+            self.min_p,
+            self.presence_penalty,
+        )
 
     def _validate_agent_config(self, agent_config: Dict[str, Any]) -> None:
         """Validate that all required fields are present.
@@ -101,12 +118,20 @@ class BaseAgent(ABC):
         self,
         temperature: float,
         max_tokens: int,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ) -> None:
         """Validate generation parameters are in valid ranges.
 
         Args:
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
+            top_p: Nucleus sampling probability (optional)
+            top_k: Top-k sampling (optional)
+            min_p: Minimum probability threshold (optional)
+            presence_penalty: Presence penalty for repetition control (optional)
 
         Raises:
             ValueError: If parameters are out of valid range
@@ -117,6 +142,16 @@ class BaseAgent(ABC):
             )
         if max_tokens <= 0:
             raise ValueError(f"max_tokens must be positive, got {max_tokens}")
+        if top_p is not None and not 0.0 < top_p <= 1.0:
+            raise ValueError(f"top_p must be between 0.0 and 1.0, got {top_p}")
+        if top_k is not None and top_k < -1:
+            raise ValueError(f"top_k must be -1 (disabled) or >= 0, got {top_k}")
+        if min_p is not None and not 0.0 <= min_p <= 1.0:
+            raise ValueError(f"min_p must be between 0.0 and 1.0, got {min_p}")
+        if presence_penalty is not None and not -2.0 <= presence_penalty <= 2.0:
+            raise ValueError(
+                f"presence_penalty must be between -2.0 and 2.0, got {presence_penalty}"
+            )
 
     def _build_system_prompt(self) -> str:
         """Build system prompt based on agent configuration.

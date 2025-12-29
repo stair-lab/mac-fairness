@@ -44,8 +44,12 @@ hf auth login --token "$HF_TOKEN"  # skipping for now --add-to-git-credential
 models=(
     # === Alibaba Qwen ===
     # "Qwen/Qwen3-4B-Instruct-2507"
-    # "Qwen/Qwen2.5-1.5B-Instruct"
+    "Qwen/Qwen2.5-72B-Instruct"
+    "Qwen/Qwen2.5-14B-Instruct"
+    "Qwen/Qwen2.5-7B-Instruct"
     # "Qwen/Qwen2.5-3B-Instruct"
+    # "Qwen/Qwen2.5-1.5B-Instruct"
+    # "Qwen/Qwen2.5-0.5B-Instruct"
 
     # === Google Gemma ===
     # "google/gemma-2-27b-it"
@@ -60,16 +64,18 @@ models=(
     # "meta-llama/Llama-3.1-8B-Instruct"
 
     # === Microsoft Phi ===
-    # "microsoft/Phi-4-mini-instruct"
-    # "microsoft/Phi-3.5-mini-instruct"
-    # "microsoft/Phi-3-mini-128k-instruct"
-    # "microsoft/Phi-3-mini-4k-instruct"
+    "microsoft/phi-4"  # 14B
+    # "microsoft/Phi-4-mini-instruct"  # 4B
+    # "microsoft/Phi-3.5-mini-instruct"  # 4B
+    "microsoft/Phi-3-medium-128k-instruct"  # 14B
+    "microsoft/Phi-3-small-128k-instruct"  # 7B
+    # "microsoft/Phi-3-mini-128k-instruct"  # 4B
 
     # === Mistral AI ===
-    "mistralai/Ministral-3-14B-Instruct-2512"
-    "mistralai/Ministral-3-8B-Instruct-2512"
+    # "mistralai/Ministral-3-14B-Instruct-2512"
+    # "mistralai/Ministral-3-8B-Instruct-2512"
     # "mistralai/Ministral-3-3B-Instruct-2512"
-    "mistralai/Mistral-7B-Instruct-v0.3"
+    # "mistralai/Mistral-7B-Instruct-v0.3"
 )
 
 echo "============================================================"

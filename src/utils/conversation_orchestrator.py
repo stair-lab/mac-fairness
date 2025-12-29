@@ -556,13 +556,13 @@ class ConversationOrchestrator:
         print(f"{'=' * 60}")
         print(f"Total questions: {questions_total}")
         print(f"Succeeded: {streaming_summary.questions_succeeded}")
-        print(f"Partial: {streaming_summary.questions_partial}")
-        print(f"Failed: {streaming_summary.questions_failed}")
-        total_completed = streaming_summary.questions_succeeded + streaming_summary.questions_partial + streaming_summary.questions_failed
-        if total_completed > 0:
-            print(f"Success rate: {streaming_summary.questions_succeeded / total_completed * 100:.1f}%")
+        not_succeeded = questions_total - streaming_summary.questions_succeeded
+        if not_succeeded > 0:
+            print(f"Not succeeded: {not_succeeded}")
+        if questions_total > 0:
+            print(f"Success rate: {streaming_summary.questions_succeeded / questions_total * 100:.1f}%")
         else:
-            print("Success rate: N/A (no questions completed)")
+            print("Success rate: N/A (no questions)")
         print(f"Duration: {(end_time - start_time).total_seconds():.1f}s")
         if batching_metrics:
             timing = batching_metrics.get("timing", {})
