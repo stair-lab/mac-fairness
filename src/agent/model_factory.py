@@ -1,8 +1,12 @@
 """Model factory for creating agent instances."""
 
-from typing import Any, Dict, Union
+from __future__ import annotations
+
+from typing import Any, Dict, Union, TYPE_CHECKING
 from .async_ollama_agent import AsyncOllamaAgent
-from .async_vllm_agent import AsyncVLLMAgent
+
+if TYPE_CHECKING:
+    from .async_vllm_agent import AsyncVLLMAgent
 
 
 class ModelFactory:
@@ -128,7 +132,7 @@ class ModelFactory:
 
     def _create_async_vllm_agent(
         self, agent_config: Dict[str, Any], model_config: Dict[str, Any]
-    ) -> AsyncVLLMAgent:
+    ) -> "AsyncVLLMAgent":
         """Create an async vLLM agent instance with batching support.
 
         Args:
@@ -147,6 +151,9 @@ class ModelFactory:
                 "vLLM backend requires 'model_path' or 'model_name' in model configuration. "
                 "Example: 'meta-llama/Llama-3.1-8B-Instruct'"
             )
+
+        # Lazy import: only load vLLM dependencies when actually creating a vLLM agent
+        from .async_vllm_agent import AsyncVLLMAgent
 
         # Create and return async vLLM agent
         # AsyncVLLMAgent handles shared model instance and batched engine internally

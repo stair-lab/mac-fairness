@@ -323,7 +323,6 @@ class ConversationOrchestrator:
             True if all questions succeeded, False otherwise.
         """
         from src.utils.request_scheduler import RequestScheduler
-        from src.agent.async_vllm_agent import AsyncVLLMAgent
 
         # Load questions
         questions_file = Path(self.config["experiment_metadata"]["questions_file"])
@@ -466,11 +465,18 @@ class ConversationOrchestrator:
             progress_callback=progress_callback,
         )
 
-        # Get batching metrics if available (AsyncVLLMAgent imported at top of method)
-        batching_metrics = AsyncVLLMAgent.get_engine_metrics()
+        # Get batching metrics and effective backend config if using vLLM
+        batching_metrics = None
+        effective_backend_config = None
+        model_defs = self.config.get("model_definitions", {})
+        has_vllm = any(
+            model_def.get("backend") == "vllm" for model_def in model_defs.values()
+        )
+        if has_vllm:
+            from src.agent.async_vllm_agent import AsyncVLLMAgent
 
-        # Get effective backend config (includes auto-calculated max_num_seqs)
-        effective_backend_config = AsyncVLLMAgent.get_effective_config()
+            batching_metrics = AsyncVLLMAgent.get_engine_metrics()
+            effective_backend_config = AsyncVLLMAgent.get_effective_config()
 
         # Finalize task summary
         end_time = datetime.now(timezone.utc)
