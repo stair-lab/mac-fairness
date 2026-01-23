@@ -2,103 +2,128 @@
 import json
 import argparse
 import pickle
+from pathlib import Path
+import re
 
+# Accept (a)/(b)/(c) OR (1)/(2)/(3) (common N3 typo), case-insensitive
+CHOICE_PATTERNS = [
+    # standard (a) (b) (c)
+    re.compile(r"\(a\)\s*(.*?)\s*\(b\)\s*(.*?)\s*\(c\)\s*(.*)\s*$", re.IGNORECASE | re.DOTALL),
+    # numeric (1) (b) (c) or (1) (2) (3)
+    re.compile(r"\(1\)\s*(.*?)\s*\(b\)\s*(.*?)\s*\(c\)\s*(.*)\s*$", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\(1\)\s*(.*?)\s*\(2\)\s*(.*?)\s*\(3\)\s*(.*)\s*$", re.IGNORECASE | re.DOTALL),
+]
 
-def normalize_choices_to_abc(choices):
-    """Normalize all choices to A/B/C format.
-
-    Binary choices (yes/no, true/false, etc.) always map to A/B.
-    Multiple choices map to A/B/C/D/etc.
+def split_question_and_choices(full_text: str):
     """
-    return [
-        {"id": chr(65 + i), "text": str(choice)} for i, choice in enumerate(choices)
-    ]
+    Robustly split a DiffAware question string into:
+      - question stem
+      - [choice_a, choice_b, choice_c]
 
-def split_question_and_choices(full_text):
-    """Split question into question-only text and choice texts"""
-    if "\n" not in full_text:
-        return full_text, ["", "", ""]   # No choices found
+    Handles:
+      - inline: "...? (a) ... (b) ... (c) ..."
+      - newline: "...?\n(a) ... (b) ... (c) ..."
+      - occasional N3 typo: (1) instead of (a)
+    """
+    if not isinstance(full_text, str):
+        return str(full_text), ["", "", ""]
 
-    question_part, choices_part = full_text.split("\n", 1)
+    text = full_text.strip()
 
-    # Split for (a), (b), (c) 
+    # First, try to split into "stem" + "choices" using the first occurrence of "(a)" or "(1)"
+    # This avoids relying on '\n', which breaks N2.
+    # Find earliest marker
+    a_pos = None
+    for marker in ["(a)", "(A)", "(1)"]:
+        p = text.find(marker)
+        if p != -1:
+            a_pos = p if a_pos is None else min(a_pos, p)
+
+    if a_pos is None:
+        # No recognizable markers; return whole text as question with blank choices
+        return text, ["", "", ""]
+
+    stem = text[:a_pos].strip()
+    choices_blob = text[a_pos:].strip()
+
+    # Now parse choices_blob using regex patterns
+    for pat in CHOICE_PATTERNS:
+        m = pat.search(choices_blob)
+        if m:
+            a, b, c = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+            return stem, [a, b, c]
+
+    # If regex fails, fallback: attempt naive splits that tolerate missing whitespace/newlines.
     try:
-        a = choices_part.split("(a)")[1].split("(b)")[0].strip()
-        b = choices_part.split("(b)")[1].split("(c)")[0].strip()
-        c = choices_part.split("(c)")[1].strip()
-        return question_part.strip(), [a, b, c]
-    except:
-        # If parsing fails, leave question whole with blank choices
-        return question_part.strip(), ["", "", ""]
+        a = choices_blob.split("(a)", 1)[1].split("(b)", 1)[0].strip()
+        b = choices_blob.split("(b)", 1)[1].split("(c)", 1)[0].strip()
+        c = choices_blob.split("(c)", 1)[1].strip()
+        return stem, [a, b, c]
+    except Exception:
+        # Try numeric fallback
+        try:
+            a = choices_blob.split("(1)", 1)[1].split("(b)", 1)[0].strip()
+            b = choices_blob.split("(b)", 1)[1].split("(c)", 1)[0].strip()
+            c = choices_blob.split("(c)", 1)[1].strip()
+            return stem, [a, b, c]
+        except Exception:
+            return stem, ["", "", ""]
 
 
-def load_df0_pkl_as_json_lines(input_pkl_path):
-    """
-    Convert .pkl dataset to 'JSON lines'
-    
-    .pkl structure:
-        [different, equal]
-    where each element is:
-        [question_str, label_int, question_id]
-
-    """
+def load_diffAware_pkl_as_json_lines(input_pkl_path):
     with open(input_pkl_path, "rb") as f:
         loaded = pickle.load(f)
 
-    json_lines = []
+    records = []
+    global_idx = 0
 
-    # Should expect [different, equal]; if not, just treat as a flat list
     if isinstance(loaded, (list, tuple)) and len(loaded) == 2:
         splits = [("different", loaded[0]), ("equal", loaded[1])]
     else:
         splits = [("all", loaded)]
 
     for split_name, split_data in splits:
-        for record in split_data:
-            # record: [question_str, label_int, question_id]
-            if not isinstance(record, (list, tuple)) or len(record) < 3:
+        for local_idx, record in enumerate(split_data):
+            if not isinstance(record, (list, tuple)) or len(record) < 2:
                 continue
 
             question_str, label_int, example_id = record[0], record[1], record[2]
-            # Get just the question and its choices separately
+
+            # Cast label safely
+            try:
+                label_int = int(label_int)
+            except Exception:
+                label_int = None
+
             question, choices = split_question_and_choices(question_str)
 
-            item = {
-                "question": question,
-                "ans0": choices[0],
-                "ans1": choices[1],
-                "ans2": choices[2],
-                "label": label_int,
-                "example_id": example_id,
-                "context": None,
-                "question_index": None,
-                "question_polarity": None,
-                "context_condition": None,
-                "category": None,
-                "answer_info": None,
-                "additional_metadata": {
-                    "split": split_name
-                },
-            }
+            records.append(
+                {
+                    "global_index": global_idx,
+                    "question": question,
+                    "ans0": choices[0],
+                    "ans1": choices[1],
+                    "ans2": choices[2],
+                    "label": label_int,
+                    "source_id": local_idx,             
+                    "example_id": example_id, 
+                    "additional_metadata": {"split": split_name, "label": label_int},
+                }
+            )
+            global_idx += 1
 
-            json_lines.append(json.dumps(item))
+    return records
 
-    return json_lines
-
-
-def format_diffAware_to_unified(input_path, output_path, dataset_name="D1_1K"):
+def format_diffAware_to_unified(input_path, output_path, subcategory="d1"):
     """
       
     """
     # Convert .pkl to JSON
-    json_lines = load_df0_pkl_as_json_lines(input_path)
+    json_lines = load_diffAware_pkl_as_json_lines(input_path)
 
     with open(output_path, "w") as f_out:
-        for idx, line in enumerate(json_lines):
-            if not line.strip():
-                continue
-
-            item = json.loads(line)
+        for item in json_lines:
+            idx = item["global_index"]
 
             # Extract choices (ans0, ans1, ans2)
             choices = []
@@ -112,35 +137,30 @@ def format_diffAware_to_unified(input_path, output_path, dataset_name="D1_1K"):
                 {"id": chr(65 + i), "text": choice} for i, choice in enumerate(choices)
             ]
 
-            # Map label (0,1,2) to answer ID (A,B,C)
             label = item.get("label")
-            correct_answer_id = chr(65 + label) if label is not None else None
+            split = (item.get("additional_metadata") or {}).get("split")
+
+            if subcategory in {"n1", "n2", "n3", "n4"} and split == "equal":
+                correct_answer_id = "C" if label is not None else None
+            else:
+                correct_answer_id = chr(65 + label) if label is not None else None
 
             # Build the minimal unified format
             formatted = {
                 # Unified question_id: benchmark_subcategory_originalid
-                "question_id": f"{dataset_name}_{item['additional_metadata']['split']}_{idx}",
+                "question_id": f"diffAware_{subcategory}_{idx}",
                 "source_dataset": "DiffAware",
-                "source_id": str(item.get("example_id", idx)),
+                "source_id": str(idx),
                 "question_type": "multiple_choice",
-                "context": item.get("context", ""),
+                "context": "",  # DiffAware has no separate context
                 "question": item["question"],
                 "choices": unified_choices,  # Always A/B/C format
                 "correct_answer_id": correct_answer_id,  # Always A/B/C format
                 # Preserve "metadata"; fields not in .pkl will return Null
                 "source_metadata": {
-                    "example_id": item.get("example_id"),
-                    "question_index": item.get("question_index"),
-                    "question_polarity": item.get("question_polarity"),
-                    "context_condition": item.get("context_condition"),
-                    "category": item.get("category"),
-                    "answer_info": item.get("answer_info"),
-                    "label": item.get("label"),
-                    "ans0": None,
-                    "ans1": None,
-                    "ans2": None,
-                    # Preserve any additional metadata
+                    "example_id": str(item.get("example_id")),
                     "additional_metadata": item.get("additional_metadata"),
+
                 },
                 "schema_version": "2025-12-10",
             }
@@ -148,20 +168,43 @@ def format_diffAware_to_unified(input_path, output_path, dataset_name="D1_1K"):
             f_out.write(json.dumps(formatted) + "\n")
 
 
+def format_diffaware_directory(input_dir, output_dir):
+    """Process all .pkl files in input directory and save to output directory."""
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    pkl_files = sorted(input_path.glob("*.pkl"))
+    if not pkl_files:
+        print(f"No .pkl files found in {input_dir}")
+        return
+
+    for input_file in pkl_files:
+        subcategory = input_file.stem.lower()
+        output_filename = f"diffAware_{subcategory}.jsonl"
+        output_file = output_path / output_filename
+
+        print(f"Processing {input_file.name} -> {output_filename}")
+        format_diffAware_to_unified(input_file, output_file, subcategory)
+
+    print(f"Formatted {len(pkl_files)} DiffAware files to {output_dir}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Convert D1_1K .pkl benchmark to unified JSONL format"
+        description="Convert DiffAware .pkl benchmark to unified JSONL format"
     )
     parser.add_argument(
-        "--input", required=True, help="Path to input diffAware subcategory .pkl file"
+        "--input-dir",
+        required=True,
+        help="Directory containing DiffAware .pkl files (e.g., local/user/Downloads/DifferenceAware)",
     )
     parser.add_argument(
-        "--output", required=True, help="Path to output unified JSONL file"
-    )
-    parser.add_argument(
-        "--dataset_name", default="D1_1K", help="Dataset name (e.g. D1_1K)",
+        "--output-dir",
+        required=True,
+        help="Output directory for formatted files (e.g., data/DifferenceAware)",
     )
 
     args = parser.parse_args()
-    format_diffAware_to_unified(args.input, args.output, args.dataset_name)
-    print(f"Formatted {args.dataset_name} data saved to {args.output}")
+    format_diffaware_directory(args.input_dir, args.output_dir)
+
