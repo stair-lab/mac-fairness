@@ -46,7 +46,7 @@ _grid:
     # ... RTX A4000 (16GB)
     RTX_A4000_model_specific_zipped_config:
       # # --> Qwen/Qwen2.5-1.5B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen25-1.5b_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_qwen25-1.5b_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   agent_definitions.0.top_p: 0.8
       #   agent_definitions.0.top_k: 20
@@ -56,7 +56,7 @@ _grid:
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       #   retry_config.max_retries: 5
       # # --> Qwen/Qwen2.5-3B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_qwen25-3b_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_qwen25-3b_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   agent_definitions.0.top_p: 0.8
       #   agent_definitions.0.top_k: 20
@@ -65,60 +65,60 @@ _grid:
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       #   retry_config.max_retries: 5
-      # --> Qwen/Qwen3-4B-Instruct-2507
-      - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-sampled-set_qwen3-4b_1agent_as-ai_v2025-12-10"
-        agent_definitions.0.temperature: 0.7
-        agent_definitions.0.top_p: 0.8
-        agent_definitions.0.top_k: 20
-        agent_definitions.0.min_p: 0
-        model_definitions.llm_0.model_path: Qwen/Qwen3-4B-Instruct-2507
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-        model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-        retry_config.max_retries: 5
+      # # --> Qwen/Qwen3-4B-Instruct-2507
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_qwen3-4b_1agent_as-ai_v2025-12-10"
+      #   agent_definitions.0.temperature: 0.7
+      #   agent_definitions.0.top_p: 0.8
+      #   agent_definitions.0.top_k: 20
+      #   agent_definitions.0.min_p: 0
+      #   model_definitions.llm_0.model_path: Qwen/Qwen3-4B-Instruct-2507
+      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 4
+      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+      #   retry_config.max_retries: 5
       # # --> google/gemma-2-2b-it
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_gemma2-2b_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_gemma2-2b_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   model_definitions.llm_0.model_path: google/gemma-2-2b-it
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       #   retry_config.max_retries: 15
-      # # --> meta-llama/Llama-3.2-1B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama32-1b_1agent_as-ai_v2025-12-10"
-      #   agent_definitions.0.temperature: 0.7
-      #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-1B-Instruct
-      #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-      #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
-      #   retry_config.max_retries: 25
+      # --> meta-llama/Llama-3.2-1B-Instruct
+      - experiment_metadata.experiment_name: "{runtime.timestamp}_llama32-1b_1agent_as-ai_v2025-12-10"
+        agent_definitions.0.temperature: 0.7
+        model_definitions.llm_0.model_path: meta-llama/Llama-3.2-1B-Instruct
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+        model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+        retry_config.max_retries: 25
       # # --> meta-llama/Llama-3.2-3B-Instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_llama32-3b_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_llama32-3b_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   model_definitions.llm_0.model_path: meta-llama/Llama-3.2-3B-Instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
       #   retry_config.max_retries: 25
       # # --> microsoft/Phi-3-mini-128k-instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi3-mini-128k_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_phi3-mini-128k_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   model_definitions.llm_0.model_path: microsoft/Phi-3-mini-128k-instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
       #   retry_config.max_retries: 15
       # # --> microsoft/Phi-3.5-mini-instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi35-mini_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_phi35-mini_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   model_definitions.llm_0.model_path: microsoft/Phi-3.5-mini-instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
       #   retry_config.max_retries: 15
       # # --> microsoft/Phi-4-mini-instruct
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_phi4-mini_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_phi4-mini_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.7
       #   model_definitions.llm_0.model_path: microsoft/Phi-4-mini-instruct
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
       #   model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
       #   retry_config.max_retries: 15
       # # --> mistralai/Ministral-3-3B-Instruct-2512
-      # - experiment_metadata.experiment_name: "{runtime.timestamp}_bbq-full-set_ministral3-3b_1agent_as-ai_v2025-12-10"
+      # - experiment_metadata.experiment_name: "{runtime.timestamp}_ministral3-3b_1agent_as-ai_v2025-12-10"
       #   agent_definitions.0.temperature: 0.05
       #   model_definitions.llm_0.model_path: mistralai/Ministral-3-3B-Instruct-2512
       #   model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
@@ -169,7 +169,7 @@ model_definitions:
     vllm_config:
       tensor_parallel_size: _ # will be overwritten by zip
       gpu_memory_utilization: _ # will be overwritten by zip
-      max_model_len: 4096
+      max_model_len: 2048
       dtype: auto # let vLLM auto-detect optimal dtype
       max_num_seqs_upper_bound: 1024 # sufficently large upperbound, actual value limited by KV cache
       enable_prefix_caching: true
