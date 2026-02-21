@@ -88,9 +88,7 @@ class VLLMOutputCapture:
 
         # Start a thread to read from the pipe and forward to original stdout
         self._stop_event = threading.Event()
-        self._reader_thread = threading.Thread(
-            target=self._reader_loop, daemon=True
-        )
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
 
         return self
@@ -318,7 +316,9 @@ class AsyncVLLMAgent(BaseAgent):
     _engines_started: ClassVar[Dict[str, bool]] = {}
     _tokenizers: ClassVar[Dict[str, Any]] = {}
     _sampling_params_class: ClassVar[Any] = None
-    _no_system_role_models: ClassVar[set] = set()  # Models that don't support system role
+    _no_system_role_models: ClassVar[set] = (
+        set()
+    )  # Models that don't support system role
 
     # Metrics
     _total_requests: ClassVar[Dict[str, int]] = {}
@@ -433,7 +433,9 @@ class AsyncVLLMAgent(BaseAgent):
                         f"Model {self.model_path} not found. "
                         f"Ensure it's downloaded: huggingface-cli download {self.model_path}"
                     ) from e
-                raise VLLMConfigError(f"Failed to initialize AsyncLLMEngine: {e}") from e
+                raise VLLMConfigError(
+                    f"Failed to initialize AsyncLLMEngine: {e}"
+                ) from e
 
         # Store captured max concurrency for later use
         self._max_concurrency_from_log[self.model_path] = output_capture.max_concurrency
@@ -635,9 +637,9 @@ class AsyncVLLMAgent(BaseAgent):
         if "gpu_device_ids" in self.vllm_config:
             kwargs["tensor_parallel_size"] = len(self.vllm_config["gpu_device_ids"])
 
-        # Set attention backend via environment variable (vLLM uses env var, not engine arg)
+        # Set attention backend via engine arg (env var deprecated in vLLM 0.13+)
         if "attention_backend" in self.vllm_config:
-            os.environ["VLLM_ATTENTION_BACKEND"] = self.vllm_config["attention_backend"]
+            kwargs["attention_backend"] = self.vllm_config["attention_backend"]
 
         return AsyncEngineArgs(**kwargs)
 
