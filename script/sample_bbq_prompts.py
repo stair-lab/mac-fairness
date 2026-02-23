@@ -9,7 +9,7 @@ random.seed(42)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 data_dir = os.path.join(project_root, 'data', 'BBQ')
-sampled_dir = os.path.join(data_dir, "sampled")
+sampled_dir = os.path.join(data_dir, "test_sampled")
 
 # Create sampled directory
 os.makedirs(sampled_dir, exist_ok=True)
@@ -24,9 +24,21 @@ for file in os.listdir(data_dir):
         # Parse JSON lines
         data = [json.loads(line.strip()) for line in lines]
         
-        # Sample 100 items
-        sample_size = min(100, len(data))
-        sampled = random.sample(data, sample_size)
+        # Split by context_condition inside source_metadata
+        ambig = [
+            item for item in data
+            if item.get("source_metadata", {}).get("context_condition") == "ambig"
+        ]
+        disambig = [
+            item for item in data
+            if item.get("source_metadata", {}).get("context_condition") == "disambig"
+        ]
+
+        # Sample 50 from each (or as many as available)
+        ambig_n = min(50, len(ambig))
+        disambig_n = min(50, len(disambig))
+        sampled = random.sample(ambig, ambig_n) + random.sample(disambig, disambig_n)
+        random.shuffle(sampled)
         
         # Create output file name
         sampled_file = file.replace('.jsonl', '_sampled.jsonl')
@@ -37,6 +49,8 @@ for file in os.listdir(data_dir):
             for item in sampled:
                 f.write(json.dumps(item) + '\n')
         
-        print(f"Sampled {sample_size} prompts from {file} to {sampled_file}")
+        print(
+            f"Sampled {ambig_n} ambig and {disambig_n} disambig prompts from {file} to {sampled_file}"
+        )
 
 print("Sampling complete.")

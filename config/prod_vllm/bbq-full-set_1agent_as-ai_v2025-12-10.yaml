@@ -7,7 +7,7 @@ _grid:
   # Derivation rules: automatically compute field values from other fields
   # Uses {field.path} placeholders with full dot-notation paths
   derive:
-    experiment_metadata.questions_file: "data/BBQ/{experiment_metadata.benchmark_subcategory}.jsonl"
+    experiment_metadata.questions_file: "data/BBQ/sampled/{experiment_metadata.benchmark_subcategory}_sampled.jsonl"
 
   # Sweep parameters: all combinations will be generated and run
   sweep:
