@@ -732,6 +732,14 @@ def _run_single_grid(
     skipped = 0
     failed_configs: List[Tuple[int, str, str]] = []  # (index, exp_name, error_msg)
     backend = None
+    force_full_cleanup_next = False  # set True after engine errors to prevent stale-engine propagation
+
+    # Use a persistent event loop across all tasks so vLLM's async engine (ZMQ, background
+    # tasks) stays alive between tasks when skip_cleanup=True. asyncio.run() tears down the
+    # loop after each call, which kills the EngineCore subprocess connection.
+    import asyncio as _asyncio
+    _loop = _asyncio.new_event_loop()
+    _asyncio.set_event_loop(_loop)
 
     for i, (config, _sweep_specs) in enumerate(expanded_configs):
         # Skip if not in pending list (already completed)
@@ -844,16 +852,17 @@ def _run_single_grid(
             # Run experiment
             orchestrator = ConversationOrchestrator(config_to_use)
 
-            # skip_cleanup optimization disabled for now - vLLM engine reuse across tasks
-            # can propagate corrupted state (EngineCore crashes, OOM) to subsequent tasks.
-            # TODO: Implement engine health check before reuse, or recreate engine while
-            # keeping model loaded in GPU memory.
-            # skip_cleanup = grid_manifest_manager.get_task_skip_cleanup(manifest_path, i)
-            skip_cleanup = False
+            # Skip GPU cleanup when the next task uses the same model to avoid reload overhead.
+            # ConversationOrchestrator.engine_healthy detects question-level engine crashes and
+            # overrides skip_cleanup internally, so dead engines are always fully torn down.
+            skip_cleanup = grid_manifest_manager.get_task_skip_cleanup(manifest_path, i)
+            if force_full_cleanup_next:
+                skip_cleanup = False
+                force_full_cleanup_next = False
 
             # Pass existing_snapshot_path for resume (avoids creating duplicate snapshots)
             # Pass old_manifest_path for atomic create-then-delete
-            all_succeeded = asyncio.run(
+            all_succeeded = _loop.run_until_complete(
                 orchestrator.run_job(
                     question_ids=question_ids,
                     succeeded_questions=succeeded_questions,
@@ -881,6 +890,9 @@ def _run_single_grid(
             failed += 1
             error_msg = f"{type(e).__name__}: {e}"
             failed_configs.append((i, exp_name, error_msg))
+            # If the exception looks engine-related, force full cleanup before the next task
+            if any(kw in error_msg.lower() for kw in ["engine", "cuda", "gpu", "oom", "vllm"]):
+                force_full_cleanup_next = True
             info_print(f"Task {config_num} not fully succeeded: {error_msg}")
             if is_debug_enabled():
                 import traceback
@@ -932,6 +944,12 @@ def _run_single_grid(
         grid_manifest_manager.delete_if_complete(
             manifest_path, delete_snapshot=delete_snapshot
         )
+
+    # Close the persistent event loop now that all tasks are done
+    try:
+        _loop.close()
+    except Exception:
+        pass
 
     # Cleanup resources once at the end
     if backend:

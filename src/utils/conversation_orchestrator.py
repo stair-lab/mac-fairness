@@ -69,6 +69,7 @@ class ConversationOrchestrator:
         self.prompt_builder = ParticipantPromptBuilder(participant_template_config)
         self.submission_timestamp = None
         self.manifest_path: Optional[Path] = None
+        self.engine_healthy: bool = True  # set False if VLLM engine crashes at question level
 
     def save_config_snapshot(self) -> str:
         """Save a snapshot of the configuration.
@@ -301,8 +302,15 @@ class ConversationOrchestrator:
                 start_time=start_time,
                 old_manifest_path=old_manifest_path,
             )
+        except Exception:
+            # Any exception from the inner job means engine state is unknown —
+            # force full cleanup so a dead engine can't be reused by the next task.
+            self.engine_healthy = False
+            raise
         finally:
-            await self._cleanup_agents(skip_engine_cleanup=skip_cleanup)
+            # If engine crashed (question-level or exception), skip_cleanup is overridden
+            # to ensure dead-engine state is fully torn down before the next grid task.
+            await self._cleanup_agents(skip_engine_cleanup=skip_cleanup and self.engine_healthy)
 
         # Clean up lock file after task completes (regardless of question success/failure)
         experiment_name = self.config["experiment_metadata"]["experiment_name"]
@@ -464,6 +472,15 @@ class ConversationOrchestrator:
             questions=questions_to_process,
             progress_callback=progress_callback,
         )
+
+        # Detect engine crashes at question level — VLLM error codes in error_summary
+        # mean the EngineCore subprocess died; mark engine unhealthy so run_job() forces
+        # full cleanup even when skip_cleanup=True (prevents dead-engine reuse next task).
+        if any(
+            entry.get("error", {}).get("error_code", "").startswith("VLLM")
+            for entry in error_summary
+        ):
+            self.engine_healthy = False
 
         # Get batching metrics and effective backend config if using vLLM
         batching_metrics = None
