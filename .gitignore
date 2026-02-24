@@ -162,3 +162,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+# Local experiment artifacts
+metric_data/
+old_metric_data/
+data/BBQ/new_sampled/
+data/BBQ/new_resampled/
+*.sbatch
+metric_data/
+old_metric_data/
+data/BBQ/new_sampled/
+data/BBQ/new_resampled/
+*.sbatch

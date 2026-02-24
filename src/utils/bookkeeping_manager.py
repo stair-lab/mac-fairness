@@ -209,6 +209,16 @@ class BookkeepingManager:
             "end_time": format_timestamp(end_time),
             "duration_seconds": round(duration_seconds, 3),
             "config_snapshot_path": config_snapshot_path or "",
+            "prompt_template_config": {
+                "for_participant": {
+                    "choice_display_format": prompt_template_config.get(
+                        "for_participant", {}
+                    ).get("choice_display_format"),
+                    "json_field_order": prompt_template_config.get(
+                        "for_participant", {}
+                    ).get("json_field_order"),
+                }
+            },
             # Throughput and performance metrics
             "throughput_performance": aggregated_stats.get(
                 "throughput_performance", {}
@@ -1198,6 +1208,18 @@ class StreamingJobSummary:
                 "last_update": format_timestamp(current_time),
                 "duration_seconds": round(duration_seconds, 3),
                 "config_snapshot_path": self.config_snapshot_path,
+                "prompt_template_config": {
+                    "for_participant": {
+                        "choice_display_format": self.config.get(
+                            "prompt_template_config", {}
+                        )
+                        .get("for_participant", {})
+                        .get("choice_display_format"),
+                        "json_field_order": self.config.get("prompt_template_config", {})
+                        .get("for_participant", {})
+                        .get("json_field_order"),
+                    }
+                },
                 "status": "in_progress",
                 "processing_statistics": {
                     "questions_total": self.questions_total,
