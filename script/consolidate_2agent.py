@@ -26,7 +26,7 @@ EXP_ROOT = Path(
 OUT_DIR = EXP_ROOT / "consolidated_2agent"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-MODEL_PAT = re.compile(r"\d{8}T\d{6}\.\d{3}Z_(.+?)_2agent_id-vanilla")
+MODEL_PAT = re.compile(r"\d{8}T\d{6}\.\d{3}Z_(.+?)_2agent_var-and-vanilla")
 
 
 def load_correct_answers(workspace: Path) -> dict[str, str]:
@@ -224,7 +224,7 @@ def main():
         exp_dirs = [
             d
             for d in subcat_dir.iterdir()
-            if d.is_dir() and "2agent_id-vanilla" in d.name
+            if d.is_dir() and "2agent_var-and-vanilla" in d.name
         ]
         if not exp_dirs:
             continue
