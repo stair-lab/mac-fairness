@@ -35,47 +35,24 @@ hf auth login --token "$HF_TOKEN"  # skipping for now --add-to-git-credential
 
 # Models to download (organized by model family)
 # Check vLLM model support: https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/models
-#
-# Sampling parameter recommendations (from model cards):
-# - Qwen3-4B: temp=0.7, top_p=0.8, top_k=20
-# - Phi models (all): temp=0.0 (greedy decoding)
-# - Others: No explicit recommendations in model cards
 
 models=(
-    # === Alibaba Qwen ===
-    # "Qwen/Qwen3-4B-Instruct-2507"
-    "Qwen/Qwen2.5-72B-Instruct"
-    "Qwen/Qwen2.5-14B-Instruct"
-    "Qwen/Qwen2.5-7B-Instruct"
-    # "Qwen/Qwen2.5-3B-Instruct"
-    # "Qwen/Qwen2.5-1.5B-Instruct"
-    # "Qwen/Qwen2.5-0.5B-Instruct"
+    # === Small ===
+    "microsoft/Phi-4-mini-instruct"
+    "mistralai/Ministral-3-3B-Instruct-2512"
+    "Qwen/Qwen3-4B-Instruct-2507"
+    "meta-llama/Llama-3.2-3B-Instruct"
 
-    # === Google Gemma ===
-    # "google/gemma-2-27b-it"
-    # "google/gemma-2-9b-it"
-    # "google/gemma-2-2b-it"
+    # === Medium ===
+    "google/gemma-2-9b-it"
+    "microsoft/phi-4"
+    "mistralai/Ministral-3-14B-Instruct-2512"
 
-    # === Meta Llama ===
-    # "meta-llama/Llama-3.3-70B-Instruct"
-    # "meta-llama/Llama-3.2-3B-Instruct"
-    # "meta-llama/Llama-3.2-1B-Instruct"
-    # "meta-llama/Llama-3.1-70B-Instruct"
-    # "meta-llama/Llama-3.1-8B-Instruct"
-
-    # === Microsoft Phi ===
-    "microsoft/phi-4"  # 14B
-    # "microsoft/Phi-4-mini-instruct"  # 4B
-    # "microsoft/Phi-3.5-mini-instruct"  # 4B
-    "microsoft/Phi-3-medium-128k-instruct"  # 14B
-    "microsoft/Phi-3-small-128k-instruct"  # 7B
-    # "microsoft/Phi-3-mini-128k-instruct"  # 4B
-
-    # === Mistral AI ===
-    # "mistralai/Ministral-3-14B-Instruct-2512"
-    # "mistralai/Ministral-3-8B-Instruct-2512"
-    # "mistralai/Ministral-3-3B-Instruct-2512"
-    # "mistralai/Mistral-7B-Instruct-v0.3"
+    # === Large ===
+    "google/gemma-2-27b-it"
+    "Qwen/Qwen3-30B-A3B-Instruct-2507"
+    "meta-llama/Llama-3.3-70B-Instruct"
+    "zai-org/GLM-4.7-Flash"
 )
 
 echo "============================================================"
