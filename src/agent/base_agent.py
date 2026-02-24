@@ -196,6 +196,13 @@ class BaseAgent(ABC):
         Returns:
             Tuple of (parsed JSON object or None, JSONParseError if repair was needed or failed)
         """
+        # Pre-process: strip thinking/chain-of-thought content.
+        # Models like GLM-4.7-Flash embed <think> in the prompt prefix, so the generated
+        # text starts with thinking content and closes with </think> before the JSON.
+        # Strip everything up to and including </think> if present.
+        if "</think>" in response_text:
+            response_text = response_text.split("</think>", 1)[1].strip()
+
         # Strategy 1: Direct parsing
         try:
             return json.loads(response_text), None

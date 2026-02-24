@@ -46,11 +46,12 @@ _grid:
     A100_model_specific_zipped_config: # A100 SXM4 (80GB)
       # --> zai-org/GLM-4.7-Flash
       - experiment_metadata.experiment_name: "{runtime.timestamp}_glm47-30b_1agent_as-ai_v2025-12-10"
-        agent_definitions.0.temperature: 1.0
-        agent_definitions.0.top_p: 0.95
+        agent_definitions.0.temperature: 1.0 # intentional, following suggested sampling param
+        agent_definitions.0.top_p: 0.95 # intentional, following suggested sampling param
+        agent_definitions.0.enable_thinking: false # GLM-4.7-Flash: disable CoT to speed up and get direct JSON output
         model_definitions.llm_0.model_path: zai-org/GLM-4.7-Flash
         model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
-        model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+        model_definitions.llm_0.vllm_config.attention_backend: "TRITON_MLA"
         retry_config.max_retries: 5
 
     A100_hpc_node_specific_zipped_config:

@@ -88,7 +88,7 @@ _grid:
         agent_definitions.1.top_k: 20
         agent_definitions.1.min_p: 0
         model_definitions.llm_0.model_path: Qwen/Qwen3-30B-A3B-Instruct-2507
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 1 # 2
         model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
         retry_config.max_retries: 5
 

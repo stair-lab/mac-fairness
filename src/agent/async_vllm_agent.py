@@ -20,10 +20,34 @@ from uuid import uuid4
 # Suppress FutureWarning from mistral_common tokenizer (deprecated special token policy)
 warnings.filterwarnings("ignore", category=FutureWarning, module="mistral_common")
 
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
+from transformers.models.glm4_moe import Glm4MoeConfig
 from vllm import SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
+
+# GLM-4.7-Flash uses model_type "glm4_moe_lite" which was added in transformers 5.x.
+# Register it as an alias for Glm4MoeConfig so vllm can load it with transformers 4.x.
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+if "glm4_moe_lite" not in CONFIG_MAPPING:
+
+    class Glm4MoeLiteConfig(Glm4MoeConfig):
+        model_type = "glm4_moe_lite"
+
+        def __init__(self, topk_method="noaux_tc", num_nextn_predict_layers=0,
+                     q_lora_rank=None, kv_lora_rank=None,
+                     qk_nope_head_dim=None, qk_rope_head_dim=None,
+                     v_head_dim=None, **kwargs):
+            self.topk_method = topk_method
+            self.num_nextn_predict_layers = num_nextn_predict_layers
+            self.q_lora_rank = q_lora_rank
+            self.kv_lora_rank = kv_lora_rank
+            self.qk_nope_head_dim = qk_nope_head_dim
+            self.qk_rope_head_dim = qk_rope_head_dim
+            self.v_head_dim = v_head_dim
+            super().__init__(**kwargs)
+
+    AutoConfig.register("glm4_moe_lite", Glm4MoeLiteConfig)
 
 from jinja2.exceptions import TemplateError
 

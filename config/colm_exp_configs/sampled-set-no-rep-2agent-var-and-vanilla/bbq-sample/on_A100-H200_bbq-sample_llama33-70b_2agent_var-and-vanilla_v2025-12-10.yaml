@@ -82,7 +82,7 @@ _grid:
         agent_definitions.0.temperature: 0.7
         agent_definitions.1.temperature: 0.7
         model_definitions.llm_0.model_path: meta-llama/Llama-3.3-70B-Instruct
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 1 # 2
         model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
         retry_config.max_retries: 5
 
