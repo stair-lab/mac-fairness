@@ -183,6 +183,8 @@ def extract_row(transcript_path: Path, correct_answers: dict) -> dict | None:
         # Human-readable
         "summary": summary_text,
         "created_at": data.get("created_at"),
+        # Full transcript for qualitative review
+        "conversation_rounds": data.get("conversation_rounds"),
     }
 
 

@@ -1,16 +1,40 @@
 """
-Push consolidated experiment results to HuggingFace dataset repo.
+Push consolidated experiment results to HuggingFace dataset repo (aims-foundation/mac-fairness).
+
+Consolidates raw transcript JSON files into per-subcategory JSONL files, then uploads
+to HuggingFace. Each JSONL row contains structured analysis fields (identity, correctness,
+position shifts) plus the full conversation_rounds for qualitative review.
 
 Usage:
-  python script/push_to_hf.py                    # push both baseline + 2-agent
-  python script/push_to_hf.py --baseline          # push only baseline
-  python script/push_to_hf.py --2agent            # push only 2-agent
-  python script/push_to_hf.py --consolidate       # re-consolidate from raw transcripts before pushing
-  python script/push_to_hf.py --consolidate-only  # only consolidate, don't push
+  # Push both baseline + 2-agent (using pre-consolidated data)
+  python script/push_to_hf.py
 
-Requires:
-  - HF token at /lfs/skampere1/0/sttruong/.cache/huggingface/token (or HF_TOKEN env var)
-  - huggingface_hub installed
+  # Push only baseline or only 2-agent
+  python script/push_to_hf.py --baseline
+  python script/push_to_hf.py --2agent
+
+  # Re-consolidate from raw transcripts first, then push
+  python script/push_to_hf.py --consolidate
+  python script/push_to_hf.py --2agent --consolidate
+
+  # Only consolidate (no push) -- useful for local inspection
+  python script/push_to_hf.py --consolidate-only
+
+Environment variables:
+  HF_TOKEN                      HuggingFace write token (required for push).
+                                Alternatively, run `huggingface-cli login` beforehand.
+  HF_HOME                       Override HF cache dir (default: <workspace>/.cache/huggingface).
+                                Set this on shared clusters to avoid AFS permission issues.
+  MAC_FAIRNESS_WORKSPACE        Project root (default: parent of script/).
+  MAC_FAIRNESS_EXPERIMENT_ROOT  Override experiment output dir (default: <workspace>/experiment/).
+
+Consolidated output:
+  experiment/consolidated_baseline/  -- 1-agent baseline JSONL files
+  experiment/consolidated_2agent/    -- 2-agent multi-round JSONL files
+
+HuggingFace repo layout:
+  baseline/bbq-sampled/              -- one JSONL per BBQ subcategory
+  2agent-vanilla/bbq-sampled/        -- one JSONL per BBQ subcategory
 """
 import argparse
 import os
@@ -21,17 +45,23 @@ from pathlib import Path
 WORKSPACE = Path(os.environ.get("MAC_FAIRNESS_WORKSPACE", Path(__file__).resolve().parent.parent))
 EXP_ROOT = Path(os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", WORKSPACE / "experiment"))
 REPO_ID = "aims-foundation/mac-fairness"
-TOKEN_PATH = Path("/lfs/skampere1/0/sttruong/.cache/huggingface/token")
 PYTHON = sys.executable
 
 
 def get_token() -> str:
+    """Resolve HF token from HF_TOKEN env var or huggingface-cli login cache."""
     token = os.environ.get("HF_TOKEN")
     if token:
         return token.strip()
-    if TOKEN_PATH.exists():
-        return TOKEN_PATH.read_text().strip()
-    raise RuntimeError(f"No HF token found. Set HF_TOKEN env var or place token at {TOKEN_PATH}")
+    # Fall back to huggingface_hub's built-in token resolution (huggingface-cli login)
+    try:
+        from huggingface_hub import get_token as hf_get_token
+        token = hf_get_token()
+        if token:
+            return token
+    except Exception:
+        pass
+    raise RuntimeError("No HF token found. Set HF_TOKEN env var or run `huggingface-cli login`.")
 
 
 def consolidate(which: str):
@@ -51,6 +81,10 @@ def consolidate(which: str):
 
 def push(which: str, token: str):
     """Upload consolidated JSONL files to HuggingFace."""
+    os.environ["HF_TOKEN"] = token
+    # Ensure HF cache/logs go somewhere writable (avoids AFS permission errors on shared clusters)
+    if "HF_HOME" not in os.environ:
+        os.environ["HF_HOME"] = str(WORKSPACE / ".cache" / "huggingface")
     from huggingface_hub import HfApi
     api = HfApi(token=token)
 
