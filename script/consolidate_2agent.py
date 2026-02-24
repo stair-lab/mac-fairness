@@ -4,12 +4,13 @@ Consolidate 2-agent multi-round transcripts into human-readable JSONL files.
 Output: experiment/consolidated_2agent/{subcategory}.jsonl
 
 Key improvements over raw transcripts:
-- Identity fields (persona, demographics, if_as_human, reveal_condition) from config snapshot
+- Identity fields (persona, demographics, if_as_human, reveal_condition_summary) from config snapshot
 - correct_answer from benchmark data
 - Derived columns: position_shifted, initial_agreement, is_correct per agent
 - Readable column names: identity_agent (spkr_000) vs vanilla_agent (spkr_001)
 - Human-readable summary text per row
 """
+
 import json
 import os
 import re
@@ -19,7 +20,9 @@ from pathlib import Path
 import yaml
 
 WORKSPACE = Path(os.environ.get("MAC_FAIRNESS_WORKSPACE", "."))
-EXP_ROOT = Path(os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", WORKSPACE / "experiment"))
+EXP_ROOT = Path(
+    os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", WORKSPACE / "experiment")
+)
 OUT_DIR = EXP_ROOT / "consolidated_2agent"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -66,18 +69,24 @@ def extract_identity(snap: dict) -> dict:
             break
     reveal = snap.get("identity_reveal_config", {})
     # Condition is "revealed" if all three are true, "anonymous" if all false
-    all_revealed = all([
-        reveal.get("reveal_persona"),
-        reveal.get("reveal_demographics"),
-        reveal.get("reveal_presence_mode"),
-    ])
-    all_hidden = not any([
-        reveal.get("reveal_persona"),
-        reveal.get("reveal_demographics"),
-        reveal.get("reveal_presence_mode"),
-    ])
-    identity["reveal_condition"] = "revealed" if all_revealed else ("anonymous" if all_hidden else "partial")
-    return identity
+    all_revealed = all(
+        [
+            reveal.get("reveal_persona"),
+            reveal.get("reveal_demographics"),
+            reveal.get("reveal_presence_mode"),
+        ]
+    )
+    all_hidden = not any(
+        [
+            reveal.get("reveal_persona"),
+            reveal.get("reveal_demographics"),
+            reveal.get("reveal_presence_mode"),
+        ]
+    )
+    identity["reveal_condition_summary"] = (
+        "revealed" if all_revealed else ("anonymous" if all_hidden else "partial")
+    )
+    return identity, reveal
 
 
 def extract_row(transcript_path: Path, correct_answers: dict) -> dict | None:
@@ -97,7 +106,7 @@ def extract_row(transcript_path: Path, correct_answers: dict) -> dict | None:
     # Load identity from config snapshot (cached)
     snap_path = meta.get("config_snapshot_path", "")
     snap = load_config_snapshot(snap_path)
-    identity = extract_identity(snap)
+    identity, reveal = extract_identity(snap)
 
     # Extract per-round opinions (spkr_000 = identity agent, spkr_001 = vanilla)
     rounds = {}
@@ -108,8 +117,12 @@ def extract_row(transcript_path: Path, correct_answers: dict) -> dict | None:
             sr = msg.get("structured_response", {})
             rounds.setdefault(rid, {})[agent] = sr.get("opinion")
 
-    ia_r = [rounds.get(i, {}).get("spkr_000") for i in range(3)]  # identity agent per round
-    va_r = [rounds.get(i, {}).get("spkr_001") for i in range(3)]  # vanilla agent per round
+    ia_r = [
+        rounds.get(i, {}).get("spkr_000") for i in range(3)
+    ]  # identity agent per round
+    va_r = [
+        rounds.get(i, {}).get("spkr_001") for i in range(3)
+    ]  # vanilla agent per round
 
     final_answers = summary.get("final_answers", {})
     ia_final = final_answers.get("spkr_000")
@@ -132,13 +145,12 @@ def extract_row(transcript_path: Path, correct_answers: dict) -> dict | None:
     persona = identity["persona"] or "no-persona"
     demo = identity["demographics"] or "no-demo"
     framing = "as-human" if identity["if_as_human"] else "as-AI"
-    reveal = identity["reveal_condition"] or "?"
+    reveal_summary = identity["reveal_condition_summary"] or "?"
     round_trace = " → ".join(
-        f"R{i}:[{ia_r[i] or '?'},{va_r[i] or '?'}]"
-        for i in range(total_rounds or 0)
+        f"R{i}:[{ia_r[i] or '?'},{va_r[i] or '?'}]" for i in range(total_rounds or 0)
     )
     summary_text = (
-        f"[{persona} | {demo} | {framing} | {reveal}] "
+        f"[{persona} | {demo} | {framing} | {reveal_summary}] "
         f"{round_trace} "
         f"→ final:[{ia_final or '?'},{va_final or '?'}] "
         f"correct:{correct or '?'} "
@@ -156,7 +168,11 @@ def extract_row(transcript_path: Path, correct_answers: dict) -> dict | None:
         "persona": identity["persona"],
         "demographics": identity["demographics"],
         "if_as_human": identity["if_as_human"],
-        "reveal_condition": identity["reveal_condition"],
+        # Nuanced reveal condition
+        "reveal_condition_summary": identity["reveal_condition_summary"],
+        "reveal_persona": reveal["reveal_persona"],
+        "reveal_demographics": reveal["reveal_demographics"],
+        "reveal_presence_mode": reveal["reveal_presence_mode"],
         # Conversation outcome
         "status": status,
         "total_rounds": total_rounds,
@@ -193,17 +209,23 @@ def main():
     correct_answers = load_correct_answers(WORKSPACE)
     print(f"  Loaded {len(correct_answers)} question→answer mappings", flush=True)
 
-    subcats = sorted([
-        d.name for d in EXP_ROOT.iterdir()
-        if d.is_dir() and not d.name.startswith("consolidated")
-    ])
+    subcats = sorted(
+        [
+            d.name
+            for d in EXP_ROOT.iterdir()
+            if d.is_dir() and not d.name.startswith("consolidated")
+        ]
+    )
     print(f"Found {len(subcats)} subcategories\n")
 
     total = 0
     for subcat in subcats:
         subcat_dir = EXP_ROOT / subcat
-        exp_dirs = [d for d in subcat_dir.iterdir()
-                    if d.is_dir() and "2agent_id-vanilla" in d.name]
+        exp_dirs = [
+            d
+            for d in subcat_dir.iterdir()
+            if d.is_dir() and "2agent_id-vanilla" in d.name
+        ]
         if not exp_dirs:
             continue
         print(f"  {subcat}: {len(exp_dirs)} experiment dirs", flush=True)
