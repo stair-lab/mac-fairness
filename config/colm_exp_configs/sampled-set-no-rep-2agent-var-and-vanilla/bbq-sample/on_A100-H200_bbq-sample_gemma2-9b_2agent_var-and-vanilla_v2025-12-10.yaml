@@ -31,23 +31,18 @@ _grid:
       - older
       - male
       - female
-      - black older female
-      - white young male
+      # - black older female
+      # - white young male
       - null
     agent_definitions.0.persona:
       - software engineer
-      - IT support specialist
-      - school principal
-      - classroom aide
+      - teacher
       - physician
-      - nurse
-      - farm manager
-      - farm technician
-      - site supervisor
+      - farmer
       - machine operator
       - null
     agent_definitions.0.if_as_human:
-      - true
+      # - true
       - false
 
   # Zip: paired values that change together (not Cartesian product)
@@ -59,18 +54,18 @@ _grid:
       - identity_reveal_config.reveal_persona: false
         identity_reveal_config.reveal_demographics: false
         identity_reveal_config.reveal_presence_mode: false # if false, all others must be false
-      # --> others can only see presence mode as-ai or as-human
-      - identity_reveal_config.reveal_persona: false
-        identity_reveal_config.reveal_demographics: false
-        identity_reveal_config.reveal_presence_mode: true
-      # --> others can see see presence mode + persona
-      - identity_reveal_config.reveal_persona: true
-        identity_reveal_config.reveal_demographics: false
-        identity_reveal_config.reveal_presence_mode: true
-      # --> others can see see presence mode + demographics
-      - identity_reveal_config.reveal_persona: false
-        identity_reveal_config.reveal_demographics: true
-        identity_reveal_config.reveal_presence_mode: true
+      # # --> others can only see presence mode as-ai or as-human
+      # - identity_reveal_config.reveal_persona: false
+      #   identity_reveal_config.reveal_demographics: false
+      #   identity_reveal_config.reveal_presence_mode: true
+      # # --> others can see see presence mode + persona
+      # - identity_reveal_config.reveal_persona: true
+      #   identity_reveal_config.reveal_demographics: false
+      #   identity_reveal_config.reveal_presence_mode: true
+      # # --> others can see see presence mode + demographics
+      # - identity_reveal_config.reveal_persona: false
+      #   identity_reveal_config.reveal_demographics: true
+      #   identity_reveal_config.reveal_presence_mode: true
       # --> others can see presence mode + persona + demographics
       - identity_reveal_config.reveal_persona: true
         identity_reveal_config.reveal_demographics: true
@@ -83,7 +78,7 @@ _grid:
         agent_definitions.1.temperature: 0.7
         model_definitions.llm_0.model_path: google/gemma-2-9b-it
         model_definitions.llm_0.vllm_config.tensor_parallel_size: 1
-        model_definitions.llm_0.vllm_config.attention_backend: "FLASHINFER"
+        model_definitions.llm_0.vllm_config.attention_backend: "FLASH_ATTN"
         retry_config.max_retries: 5
 
     A100_hpc_node_specific_zipped_config:
