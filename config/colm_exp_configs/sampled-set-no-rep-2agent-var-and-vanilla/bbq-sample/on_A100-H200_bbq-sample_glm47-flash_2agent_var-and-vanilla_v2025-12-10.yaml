@@ -42,7 +42,7 @@ _grid:
       - machine operator
       - null
     agent_definitions.0.if_as_human:
-      # - true
+      - true
       - false
 
   # Zip: paired values that change together (not Cartesian product)

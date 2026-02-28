@@ -42,8 +42,8 @@ _grid:
       - machine operator
       - null
     agent_definitions.0.if_as_human:
-      # - true
-      - false
+      - true
+      # - false
 
   # Zip: paired values that change together (not Cartesian product)
   # Use {runtime.timestamp} for auto-generated timestamps (format: YYYYMMDDTHHmmZ)
