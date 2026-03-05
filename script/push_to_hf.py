@@ -1,5 +1,5 @@
 """
-Push consolidated experiment results to HuggingFace dataset repo (aims-foundation/mac-fairness).
+Push consolidated experiment results to HuggingFace dataset repo (mac-fairness/mac-fairness).
 
 Consolidates raw transcript JSON files into per-subcategory JSONL files, then uploads
 to HuggingFace. Each JSONL row contains structured analysis fields (identity, correctness,
@@ -33,17 +33,24 @@ Consolidated output:
   experiment/consolidated_2agent/    -- 2-agent multi-round JSONL files
 
 HuggingFace repo layout:
-  baseline/bbq-sampled/              -- one JSONL per BBQ subcategory
-  2agent-vanilla/bbq-sampled/        -- one JSONL per BBQ subcategory
+  sampled-set-no-rep-2agent-var-and-vanilla/bbq-sampled/        -- one JSONL per BBQ subcategory
+  sampled-set-no-rep-2agent-var-and-vanilla/discrimEval-sampled/ -- one JSONL per discrimEval subcategory
+  sampled-set-no-rep-2agent-var-and-vanilla/diffAware-sampled/   -- one JSONL per diffAware subcategory
 """
+
 import argparse
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-WORKSPACE = Path(os.environ.get("MAC_FAIRNESS_WORKSPACE", Path(__file__).resolve().parent.parent))
-EXP_ROOT = Path(os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", WORKSPACE / "experiment"))
+WORKSPACE = Path(
+    os.environ.get("MAC_FAIRNESS_WORKSPACE", Path(__file__).resolve().parent.parent)
+)
+EXP_ROOT = Path(
+    os.environ.get("MAC_FAIRNESS_EXPERIMENT_ROOT", WORKSPACE / "experiment")
+)
+# REPO_ID = "mac-fairness/mac-fairness"
 REPO_ID = "aims-foundation/mac-fairness"
 PYTHON = sys.executable
 
@@ -56,12 +63,15 @@ def get_token() -> str:
     # Fall back to huggingface_hub's built-in token resolution (huggingface-cli login)
     try:
         from huggingface_hub import get_token as hf_get_token
+
         token = hf_get_token()
         if token:
             return token
     except Exception:
         pass
-    raise RuntimeError("No HF token found. Set HF_TOKEN env var or run `huggingface-cli login`.")
+    raise RuntimeError(
+        "No HF token found. Set HF_TOKEN env var or run `huggingface-cli login`."
+    )
 
 
 def consolidate(which: str):
@@ -70,12 +80,12 @@ def consolidate(which: str):
     if which in ("baseline", "both"):
         script = WORKSPACE / "script" / "consolidate_baseline.py"
         if script.exists():
-            print(f"\n{'='*60}\nConsolidating baseline transcripts...\n{'='*60}")
+            print(f"\n{'=' * 60}\nConsolidating baseline transcripts...\n{'=' * 60}")
             subprocess.run([PYTHON, "-u", str(script)], env=env, check=True)
     if which in ("2agent", "both"):
         script = WORKSPACE / "script" / "consolidate_2agent.py"
         if script.exists():
-            print(f"\n{'='*60}\nConsolidating 2-agent transcripts...\n{'='*60}")
+            print(f"\n{'=' * 60}\nConsolidating 2-agent transcripts...\n{'=' * 60}")
             subprocess.run([PYTHON, "-u", str(script)], env=env, check=True)
 
 
@@ -86,6 +96,7 @@ def push(which: str, token: str):
     if "HF_HOME" not in os.environ:
         os.environ["HF_HOME"] = str(WORKSPACE / ".cache" / "huggingface")
     from huggingface_hub import HfApi
+
     api = HfApi(token=token)
 
     if which in ("baseline", "both"):
@@ -107,26 +118,85 @@ def push(which: str, token: str):
     if which in ("2agent", "both"):
         folder = EXP_ROOT / "consolidated_2agent"
         if folder.exists() and any(folder.glob("*.jsonl")):
-            count = sum(1 for _ in folder.glob("*.jsonl"))
-            print(f"\nUploading {count} 2-agent JSONL files from {folder}...")
-            result = api.upload_folder(
-                folder_path=str(folder),
-                repo_id=REPO_ID,
-                repo_type="dataset",
-                path_in_repo="2agent-vanilla/bbq-sampled",
-                commit_message=f"Update 2-agent BBQ results ({count} subcategories)",
-            )
-            print(f"Done: {result}")
+            prefix = "sampled-set-no-rep-2agent-var-and-vanilla"
+
+            bbq_files = list(folder.glob("bbq_*.jsonl"))
+            if bbq_files:
+                print(
+                    f"\nUploading {len(bbq_files)} 2-agent BBQ JSONL files from {folder}..."
+                )
+                result = api.upload_folder(
+                    folder_path=str(folder),
+                    repo_id=REPO_ID,
+                    create_pr=True,
+                    repo_type="dataset",
+                    path_in_repo=f"{prefix}/bbq-sampled",
+                    allow_patterns=["bbq_*.jsonl"],
+                    commit_message=f"Update 2-agent BBQ results ({len(bbq_files)} subcategories)",
+                )
+                print(f"Done: {result}")
+
+            discrim_files = list(folder.glob("discrimEval_*.jsonl"))
+            if discrim_files:
+                print(
+                    f"\nUploading {len(discrim_files)} 2-agent discrimEval JSONL files from {folder}..."
+                )
+                result = api.upload_folder(
+                    folder_path=str(folder),
+                    repo_id=REPO_ID,
+                    create_pr=True,
+                    repo_type="dataset",
+                    path_in_repo=f"{prefix}/discrimEval-sampled",
+                    allow_patterns=["discrimEval_*.jsonl"],
+                    commit_message=f"Update 2-agent discrimEval results ({len(discrim_files)} subcategories)",
+                )
+                print(f"Done: {result}")
+
+            diffaware_files = list(folder.glob("diffAware_*.jsonl"))
+            if diffaware_files:
+                print(
+                    f"\nUploading {len(diffaware_files)} 2-agent diffAware JSONL files from {folder}..."
+                )
+                result = api.upload_folder(
+                    folder_path=str(folder),
+                    repo_id=REPO_ID,
+                    create_pr=True,
+                    repo_type="dataset",
+                    path_in_repo=f"{prefix}/diffAware-sampled",
+                    allow_patterns=["diffAware_*.jsonl"],
+                    commit_message=f"Update 2-agent diffAware results ({len(diffaware_files)} subcategories)",
+                )
+                print(f"Done: {result}")
+
+            if not bbq_files and not discrim_files and not diffaware_files:
+                print(f"No 2-agent data at {folder}, skipping.")
         else:
             print(f"No 2-agent data at {folder}, skipping.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Push experiment results to HuggingFace")
-    parser.add_argument("--baseline", action="store_true", help="Push only baseline results")
-    parser.add_argument("--2agent", dest="two_agent", action="store_true", help="Push only 2-agent results")
-    parser.add_argument("--consolidate", action="store_true", help="Re-consolidate from raw transcripts before pushing")
-    parser.add_argument("--consolidate-only", action="store_true", help="Only consolidate, don't push to HF")
+    parser = argparse.ArgumentParser(
+        description="Push experiment results to HuggingFace"
+    )
+    parser.add_argument(
+        "--baseline", action="store_true", help="Push only baseline results"
+    )
+    parser.add_argument(
+        "--2agent",
+        dest="two_agent",
+        action="store_true",
+        help="Push only 2-agent results",
+    )
+    parser.add_argument(
+        "--consolidate",
+        action="store_true",
+        help="Re-consolidate from raw transcripts before pushing",
+    )
+    parser.add_argument(
+        "--consolidate-only",
+        action="store_true",
+        help="Only consolidate, don't push to HF",
+    )
     args = parser.parse_args()
 
     which = "both"

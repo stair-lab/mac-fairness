@@ -7,13 +7,19 @@ _grid:
   # Derivation rules: automatically compute field values from other fields
   # Uses {field.path} placeholders with full dot-notation paths
   derive:
-    experiment_metadata.questions_file: "data/DiscrimEval/sampled/{experiment_metadata.benchmark_subcategory}.jsonl"
+    experiment_metadata.questions_file: "data/DifferenceAwareness/sampled/{experiment_metadata.benchmark_subcategory}.jsonl"
 
   # Sweep parameters: all combinations will be generated and run
   sweep:
     experiment_metadata.benchmark_subcategory:
-      - discrimEval_explicit_sampled
-      - discrimEval_implicit_sampled
+      - diffAware_d1_sampled
+      - diffAware_d2_sampled
+      - diffAware_d3_sampled
+      - diffAware_d4_sampled
+      - diffAware_n1_sampled
+      - diffAware_n2_sampled
+      - diffAware_n3_sampled
+      - diffAware_n4_sampled
     # Only varying agent 0
     agent_definitions.0.demographics:
       - black

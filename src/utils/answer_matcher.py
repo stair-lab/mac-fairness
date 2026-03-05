@@ -230,6 +230,14 @@ class FlexibleAnswerMatcher:
         return result
 
 
+def similarity_score(text1: str, text2: str) -> float:
+    """Calculate similarity score between two strings.
+
+    Returns a float between 0 and 1, where 1 means identical after normalization.
+    """
+    return FlexibleAnswerMatcher().calculate_similarity(text1, text2)
+
+
 # Example usage and testing
 if __name__ == "__main__":
     matcher = FlexibleAnswerMatcher()
