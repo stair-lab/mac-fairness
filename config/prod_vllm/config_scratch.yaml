@@ -1,19 +1,28 @@
 # Grid configuration for parameter sweep experiments
-# Dry run:  python script/run_job.py config/colm_exp_configs/config_scratch_name.yaml --grid --dry-run
-# Run with: CUDA_VISIBLE_DEVICES=X TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=4 MAC_FAIRNESS_LIVE_STATUS=1 python script/run_job.py config/colm_exp_configs/config_scratch_name.yaml --grid --rep 1
+# Dry run:  python script/run_job.py config/config_scratch_name.yaml --grid --dry-run
+# Run with: TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=X OMP_NUM_THREADS=4 MAC_FAIRNESS_LIVE_STATUS=1 python script/run_job.py config/config_scratch_name.yaml --grid --rep 1
 
 # Grid configuration - defines parameter sweep
 _grid:
   # Derivation rules: automatically compute field values from other fields
   # Uses {field.path} placeholders with full dot-notation paths
   derive:
-    experiment_metadata.questions_file: "data/DiscrimEval/sampled/{experiment_metadata.benchmark_subcategory}.jsonl"
+    experiment_metadata.questions_file: "data/BBQ/sampled/{experiment_metadata.benchmark_subcategory}.jsonl"
 
   # Sweep parameters: all combinations will be generated and run
   sweep:
     experiment_metadata.benchmark_subcategory:
-      - discrimEval_explicit_sampled
-      - discrimEval_implicit_sampled
+      - bbq_age_sampled
+      - bbq_disability_status_sampled
+      - bbq_gender_identity_sampled
+      - bbq_nationality_sampled
+      - bbq_physical_appearance_sampled
+      - bbq_race_ethnicity_sampled
+      - bbq_race_x_gender_sampled
+      - bbq_race_x_ses_sampled
+      - bbq_religion_sampled
+      - bbq_ses_sampled
+      - bbq_sexual_orientation_sampled
     # Only varying agent 0
     agent_definitions.0.demographics:
       - black
@@ -72,7 +81,7 @@ _grid:
         agent_definitions.1.top_p: 0.95 # intentional, following suggested sampling param
         agent_definitions.1.enable_thinking: false # GLM-4.7-Flash: disable CoT to speed up and get direct JSON output
         model_definitions.llm_0.model_path: zai-org/GLM-4.7-Flash
-        model_definitions.llm_0.vllm_config.tensor_parallel_size: 1 # 2
+        model_definitions.llm_0.vllm_config.tensor_parallel_size: 2
         model_definitions.llm_0.vllm_config.attention_backend: "TRITON_MLA"
         retry_config.max_retries: 5
 

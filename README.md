@@ -128,7 +128,9 @@ $MAC_FAIRNESS_WORKSPACE/
 │   │   ├── build_flashinfer.sh             # FlashInfer build script
 │   │   └── download_models.sh              # Model downloading utilities
 │   ├── formatter/                          # Benchmark data formatter
-│   │   └── bbq_formatter.py                # BBQ benchmark formatter
+│   │   ├── bbq_formatter.py                # BBQ benchmark formatter
+│   │   ├── diff_aware_formatter.py         # DifferenceAwareness benchmark formatter
+│   │   └── discrim_eval_formatter.py       # DiscrimEval benchmark formatter
 │   └── run_job.py                          # Run grid experiments (main entry point)
 │
 ├── src/                                    # Source code
