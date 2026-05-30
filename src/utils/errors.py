@@ -469,6 +469,43 @@ class OllamaNotAvailableError(OllamaError):
         )
 
 
+# API Errors (hosted LLM providers, e.g. OpenAI-compatible endpoints)
+class APIError(MacFairnessError):
+    """Base class for hosted-API-related errors."""
+
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "API_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message=message, error_code=error_code, details=details)
+
+
+class APIRequestError(APIError):
+    """Raised when a hosted-API generation request fails."""
+
+    def __init__(
+        self,
+        message: str,
+        model: Optional[str] = None,
+        status_code: Optional[int] = None,
+        original_error: Optional[Exception] = None,
+    ):
+        details: Dict[str, Any] = {}
+        if model is not None:
+            details["model"] = model
+        if status_code is not None:
+            details["status_code"] = status_code
+        if original_error is not None:
+            details["original_error"] = str(original_error)
+        super().__init__(
+            message=message,
+            error_code="API_REQUEST_ERROR",
+            details=details if details else None,
+        )
+
+
 # Manifest Errors
 class ManifestError(MacFairnessError):
     """Base class for manifest-related errors."""

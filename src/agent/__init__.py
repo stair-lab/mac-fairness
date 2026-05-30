@@ -2,6 +2,8 @@
 
 from .base_agent import BaseAgent, AsyncAgentProtocol
 from .async_ollama_agent import AsyncOllamaAgent
+from .async_openai_agent import AsyncOpenAIAgent
+from .async_anthropic_agent import AsyncAnthropicAgent
 from .model_factory import ModelFactory
 
 
@@ -14,7 +16,11 @@ def __getattr__(name: str):
             RequestMetricsCollector,
         )
 
-        return {"AsyncVLLMAgent": AsyncVLLMAgent, "RequestTiming": RequestTiming, "RequestMetricsCollector": RequestMetricsCollector}[name]
+        return {
+            "AsyncVLLMAgent": AsyncVLLMAgent,
+            "RequestTiming": RequestTiming,
+            "RequestMetricsCollector": RequestMetricsCollector,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -22,6 +28,8 @@ __all__ = [
     "BaseAgent",
     "AsyncAgentProtocol",
     "AsyncOllamaAgent",
+    "AsyncOpenAIAgent",
+    "AsyncAnthropicAgent",
     "AsyncVLLMAgent",
     "RequestTiming",
     "RequestMetricsCollector",

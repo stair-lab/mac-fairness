@@ -112,8 +112,8 @@ class LiveStatusDisplay:
             lines.append("")
 
         # Print all lines (this reserves the space)
-        for line in lines[:self.display_lines]:
-            padded_line = line[:self.TOTAL_WIDTH].ljust(self.TOTAL_WIDTH)
+        for line in lines[: self.display_lines]:
+            padded_line = line[: self.TOTAL_WIDTH].ljust(self.TOTAL_WIDTH)
             print(padded_line)
         print(end="", flush=True)
 
@@ -145,9 +145,7 @@ class LiveStatusDisplay:
     def _format_request_short(self, idx: int, req: "Request") -> str:
         """Format a single request for display (short format)."""
         q_id = (
-            req.question.get("question_id", f"q_{req.conversation_id}")
-            if req.question
-            else f"q_{req.conversation_id}"
+            req.question.get("question_id", f"q_{req.conversation_id}") if req.question else f"q_{req.conversation_id}"
         )
         # Get short model name if available
         model_name = self.agent_model_names.get(req.agent_id, "")
@@ -177,9 +175,7 @@ class LiveStatusDisplay:
                 in_flight = model_in_flight[model_name]
                 max_seqs = model_max_num_seqs[model_name]
                 # Shorten model name for display (take last part after /)
-                short_name = (
-                    model_name.split("/")[-1] if "/" in model_name else model_name
-                )
+                short_name = model_name.split("/")[-1] if "/" in model_name else model_name
                 # Truncate if still too long
                 if len(short_name) > 15:
                     short_name = short_name[:12] + "..."
@@ -217,9 +213,7 @@ class LiveStatusDisplay:
         lines = []
 
         # Format in-flight status (handles single and multi-model)
-        in_flight_status = self._format_in_flight_status(
-            model_in_flight, model_max_num_seqs
-        )
+        in_flight_status = self._format_in_flight_status(model_in_flight, model_max_num_seqs)
 
         # Header (5 lines - removed GPU line)
         lines.append(f"{'═' * self.TOTAL_WIDTH}")
@@ -297,9 +291,7 @@ class ConversationState:
     is_finalized: bool = False  # Guard against double finalization
     error: Optional[MacFairnessError] = None
     transcript_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    execution_timestamp: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    execution_timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass(order=True)
@@ -451,9 +443,7 @@ class RequestScheduler:
             self.dependencies[agent_id] = set(speak_after)
 
         # Pools (unified across models - readiness is model-agnostic)
-        self.pending_pool: Dict[
-            str, Request
-        ] = {}  # key: f"{conv_id}_{round_id}_{agent_id}"
+        self.pending_pool: Dict[str, Request] = {}  # key: f"{conv_id}_{round_id}_{agent_id}"
         self.pre_departure_pool: List[PrioritizedRequest] = []  # heapq
 
         # Conversation states
@@ -523,18 +513,22 @@ class RequestScheduler:
             elif backend == "ollama":
                 # Ollama or other backends - optional, default to 32
                 max_num_seqs = model_config.get("max_num_seqs", 32)
-            else:
-                raise MissingConfigSectionError(
-                    f"model_definitions.{model_name}.backend missing/unsupported"
+            elif backend in ("openai", "anthropic"):
+                # Hosted API - bounds concurrent in-flight requests (rate-limit aware).
+                # Prefer top-level max_num_seqs, fall back to api_config, default 16.
+                api_config = model_config.get("api_config", {}) or {}
+                max_num_seqs = model_config.get(
+                    "max_num_seqs",
+                    api_config.get("max_concurrent_requests", 16),
                 )
+            else:
+                raise MissingConfigSectionError(f"model_definitions.{model_name}.backend missing/unsupported")
 
             self.model_semaphores[model_name] = asyncio.Semaphore(max_num_seqs)
             self.model_max_num_seqs[model_name] = max_num_seqs
             self.model_in_flight[model_name] = 0
 
-            _debug_print(
-                f"Model '{model_name}' ({backend}): max_num_seqs={max_num_seqs}"
-            )
+            _debug_print(f"Model '{model_name}' ({backend}): max_num_seqs={max_num_seqs}")
 
     def _get_model_for_agent(self, agent_id: str) -> str:
         """Get the model name for a given agent."""
@@ -565,9 +559,7 @@ class RequestScheduler:
             conv_state = self.conversation_states[request.conversation_id]
 
             # Check if this request's dependencies are satisfied
-            if self._is_agent_ready(
-                request.agent_id, conv_state.current_round_completed_agents
-            ):
+            if self._is_agent_ready(request.agent_id, conv_state.current_round_completed_agents):
                 # Prepare the request with prompt and context
                 self._prepare_request(request, conv_state)
 
@@ -587,9 +579,7 @@ class RequestScheduler:
         question = conv_state.question
 
         # Get visible messages
-        visible_messages = self.router.get_visible_messages(
-            request.round_id, conv_state.conversation_rounds, agent_id
-        )
+        visible_messages = self.router.get_visible_messages(request.round_id, conv_state.conversation_rounds, agent_id)
 
         # Add messages from current round that are visible
         for msg in conv_state.current_round_messages:
@@ -610,9 +600,7 @@ class RequestScheduler:
         request.question = question
         request.rounds_completed = conv_state.rounds_completed
 
-    def _initialize_conversation(
-        self, conversation_id: int, question: Dict[str, Any]
-    ) -> None:
+    def _initialize_conversation(self, conversation_id: int, question: Dict[str, Any]) -> None:
         """Initialize a new conversation and create its round 0 requests.
 
         Uses pre-assigned transcript_id from task manifest if available,
@@ -640,9 +628,7 @@ class RequestScheduler:
         # Create requests for round 0
         self._create_round_requests(conv_state, round_id=0)
 
-    def _create_round_requests(
-        self, conv_state: ConversationState, round_id: int
-    ) -> None:
+    def _create_round_requests(self, conv_state: ConversationState, round_id: int) -> None:
         """Create requests for all agents in a round."""
         agent_ids = [ac["agent_id"] for ac in self.agent_defs]
         speaking_order = self.router.get_speaking_order(agent_ids, round_id)
@@ -657,9 +643,7 @@ class RequestScheduler:
             )
 
             # Check if immediately ready (no dependencies)
-            if self._is_agent_ready(
-                agent_id, conv_state.current_round_completed_agents
-            ):
+            if self._is_agent_ready(agent_id, conv_state.current_round_completed_agents):
                 self._prepare_request(request, conv_state)
                 prioritized = PrioritizedRequest.create(request)
                 heapq.heappush(self.pre_departure_pool, prioritized)
@@ -752,9 +736,7 @@ class RequestScheduler:
                     )
 
             # Transform response
-            transformed = transform_llm_response(
-                structured_output, agent_config, question, answer_match_threshold
-            )
+            transformed = transform_llm_response(structured_output, agent_config, question, answer_match_threshold)
 
             answer_match_info = transformed.pop("_answer_match_info", None)
             matched_answer_text = transformed.pop("_matched_answer_text", None)
@@ -808,9 +790,7 @@ class RequestScheduler:
                 metadata=metadata,
                 prompt_tokens=last_prompt_tokens,
                 response_tokens=last_response_tokens,
-                validation_errors=error_collector.get_summary()["errors"]
-                if error_collector.has_errors()
-                else [],
+                validation_errors=error_collector.get_summary()["errors"] if error_collector.has_errors() else [],
             )
 
         # Should not reach here
@@ -826,19 +806,13 @@ class RequestScheduler:
         Called when a conversation fails to clean up queued requests.
         """
         # Remove from pending pool
-        keys_to_remove = [
-            key
-            for key, req in self.pending_pool.items()
-            if req.conversation_id == conversation_id
-        ]
+        keys_to_remove = [key for key, req in self.pending_pool.items() if req.conversation_id == conversation_id]
         for key in keys_to_remove:
             del self.pending_pool[key]
 
         # Remove from pre-departure pool (rebuild without this conversation's requests)
         self.pre_departure_pool = [
-            pr
-            for pr in self.pre_departure_pool
-            if pr.request.conversation_id != conversation_id
+            pr for pr in self.pre_departure_pool if pr.request.conversation_id != conversation_id
         ]
         heapq.heapify(self.pre_departure_pool)
 
@@ -877,9 +851,7 @@ class RequestScheduler:
         )
 
         agent_ids = [ac["agent_id"] for ac in self.agent_defs]
-        visible_to = self.router.get_visibility_list(
-            agent_id, agent_config["role"], agent_ids, request.round_id
-        )
+        visible_to = self.router.get_visibility_list(agent_id, agent_config["role"], agent_ids, request.round_id)
 
         message_id = f"msg_{request.round_id}_{request.message_index:03d}"
 
@@ -903,9 +875,7 @@ class RequestScheduler:
 
         # Check if round is complete
         expected_agents = set(
-            self.router.get_speaking_order(
-                [ac["agent_id"] for ac in self.agent_defs], request.round_id
-            )
+            self.router.get_speaking_order([ac["agent_id"] for ac in self.agent_defs], request.round_id)
         )
 
         # Track if we need to finalize after all sync work is done
@@ -925,10 +895,7 @@ class RequestScheduler:
 
             # Check if conversation is complete
             next_round_id = request.round_id + 1
-            if (
-                next_round_id >= self.router.max_rounds
-                or not self.router.should_continue(next_round_id)
-            ):
+            if next_round_id >= self.router.max_rounds or not self.router.should_continue(next_round_id):
                 conv_state.is_complete = True
                 should_finalize = True
             else:
@@ -971,9 +938,7 @@ class RequestScheduler:
                 "details": getattr(error, "details", {}),
             }
 
-            total_messages = sum(
-                len(r["messages"]) for r in conv_state.conversation_rounds
-            )
+            total_messages = sum(len(r["messages"]) for r in conv_state.conversation_rounds)
             status = "partial" if total_messages > 0 else "failed"
 
             transcript = self.transcript_manager.build_transcript(
@@ -1061,6 +1026,7 @@ class RequestScheduler:
             # FileNotFoundError can occur when vLLM's IPC socket/pipe is lost
             # (e.g., worker process crashed). Wrap in VLLMBatchError for clarity.
             from src.agent.async_vllm_agent import VLLMBatchError
+
             wrapped = VLLMBatchError(
                 message=f"vLLM IPC error (worker may have crashed): {e}",
                 batch_size=1,
@@ -1072,9 +1038,7 @@ class RequestScheduler:
                 conv_state.is_complete = True
                 self._remove_conversation_requests(request.conversation_id)
                 await self._finalize_conversation(conv_state, error=wrapped)
-                _debug_print(
-                    f"vLLM IPC error in conversation {request.conversation_id}: {e}"
-                )
+                _debug_print(f"vLLM IPC error in conversation {request.conversation_id}: {e}")
         except Exception as e:
             # Handle unexpected exceptions to prevent conversation from getting stuck.
             # Without this, unhandled exceptions cause the task to complete without
@@ -1083,11 +1047,7 @@ class RequestScheduler:
             conv_state = self.conversation_states[request.conversation_id]
             if not conv_state.is_complete:
                 # Wrap in UnexpectedError for consistent error handling
-                question_id = (
-                    conv_state.question.get("question_id")
-                    if conv_state.question
-                    else None
-                )
+                question_id = conv_state.question.get("question_id") if conv_state.question else None
                 wrapped_error = UnexpectedError(
                     original_error=e,
                     context="request execution",
@@ -1097,10 +1057,7 @@ class RequestScheduler:
                 self._remove_conversation_requests(request.conversation_id)
                 # Async finalization - file writes in thread pool
                 await self._finalize_conversation(conv_state, error=wrapped_error)
-                _debug_print(
-                    f"Unexpected error in conversation {request.conversation_id}: "
-                    f"{type(e).__name__}: {e}"
-                )
+                _debug_print(f"Unexpected error in conversation {request.conversation_id}: {type(e).__name__}: {e}")
         finally:
             # Decrement in-flight count when done (increment happens in scheduler loop)
             self.model_in_flight[model_name] -= 1
@@ -1132,9 +1089,7 @@ class RequestScheduler:
             )
 
             # Check termination condition
-            all_complete = self.conversation_states and all(
-                cs.is_complete for cs in self.conversation_states.values()
-            )
+            all_complete = self.conversation_states and all(cs.is_complete for cs in self.conversation_states.values())
             if all_complete:
                 break
 
@@ -1189,9 +1144,7 @@ class RequestScheduler:
     async def run_questions(
         self,
         questions: List[Dict[str, Any]],
-        progress_callback: Optional[
-            Callable[[int, int, int, Dict[str, Any]], None]
-        ] = None,
+        progress_callback: Optional[Callable[[int, int, int, Dict[str, Any]], None]] = None,
     ) -> List[Dict[str, Any]]:
         """Run all questions using request-level scheduling.
 

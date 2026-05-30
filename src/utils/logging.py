@@ -39,6 +39,8 @@ ERROR_CODE_MESSAGES = {
     "MAX_RETRIES_EXCEEDED": "Maximum retry attempts exceeded",
     "JSON_PARSE_REPAIRED": "JSON parsing required repair",
     "JSON_PARSE_FAILED": "JSON parsing failed",
+    "API_ERROR": "Hosted API error",
+    "API_REQUEST_ERROR": "Hosted API request failed",
 }
 
 
@@ -244,9 +246,7 @@ def format_filename_timestamp(dt: datetime) -> str:
     return dt.strftime("%Y%m%dT%H%M%S") + f".{dt.microsecond // 1000:03d}Z"
 
 
-def display_path(
-    path: Union[str, Path], project_root: Union[str, Path, None] = None
-) -> str:
+def display_path(path: Union[str, Path], project_root: Union[str, Path, None] = None) -> str:
     """Format a path for display, replacing known roots with environment variable names.
 
     Handles two environment variables:
@@ -283,9 +283,7 @@ def display_path(
     return path_str
 
 
-def resolve_path(
-    path: Union[str, Path], project_root: Union[str, Path, None] = None
-) -> str:
+def resolve_path(path: Union[str, Path], project_root: Union[str, Path, None] = None) -> str:
     """Resolve a path containing environment variable placeholders to an absolute path.
 
     This is the inverse of display_path(). Handles:
@@ -350,15 +348,10 @@ def aggregate_validation_errors(
                 continue
             error_code = error_class.replace("Error", "").upper()
 
-        generic_msg = ERROR_CODE_MESSAGES.get(
-            error_code, error_code.replace("_", " ").title()
-        )
+        generic_msg = ERROR_CODE_MESSAGES.get(error_code, error_code.replace("_", " ").title())
         error_code_counts[generic_msg] += 1
 
-    return [
-        {"error": msg, "count": count}
-        for msg, count in sorted(error_code_counts.items(), key=lambda x: -x[1])
-    ]
+    return [{"error": msg, "count": count} for msg, count in sorted(error_code_counts.items(), key=lambda x: -x[1])]
 
 
 # =============================================================================
@@ -423,9 +416,7 @@ class ConversationTokenStats:
 class MetricsCollector:
     """Collects and aggregates performance metrics for conversations."""
 
-    def calculate_conversation_metrics(
-        self, conversation_rounds: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def calculate_conversation_metrics(self, conversation_rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate metrics for a single conversation.
 
         Args:
@@ -455,9 +446,7 @@ class MetricsCollector:
             "total_tokens_prompt": total_tokens_prompt,
         }
 
-    def extract_final_answers(
-        self, conversation_rounds: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def extract_final_answers(self, conversation_rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Extract final answers from the last round of conversation.
 
         Args:
@@ -495,9 +484,7 @@ class MetricsCollector:
         unique_answers = set(final_answers.values())
         return len(unique_answers) == 1
 
-    def calculate_retry_statistics(
-        self, conversation_rounds: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def calculate_retry_statistics(self, conversation_rounds: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate retry statistics from conversation rounds.
 
         Args:
@@ -524,9 +511,7 @@ class MetricsCollector:
             "max_retries_per_message": max_retries_per_message,
         }
 
-    def aggregate_validation_errors(
-        self, all_validation_errors: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def aggregate_validation_errors(self, all_validation_errors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Aggregate validation errors using error codes.
 
         Args:
@@ -537,9 +522,7 @@ class MetricsCollector:
         """
         return aggregate_validation_errors(all_validation_errors)
 
-    def calculate_experiment_summary(
-        self, transcripts: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def calculate_experiment_summary(self, transcripts: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate summary statistics for an entire experiment.
 
         Args:
@@ -550,32 +533,21 @@ class MetricsCollector:
         """
         total_conversations = len(transcripts)
         successful_conversations = sum(
-            1
-            for t in transcripts
-            if t.get("conversation_summary", {}).get("status") == "succeeded"
+            1 for t in transcripts if t.get("conversation_summary", {}).get("status") == "succeeded"
         )
         failed_conversations = total_conversations - successful_conversations
 
         total_tokens_all = sum(
-            t.get("conversation_summary", {})
-            .get("performance_metrics", {})
-            .get("total_tokens", 0)
-            for t in transcripts
+            t.get("conversation_summary", {}).get("performance_metrics", {}).get("total_tokens", 0) for t in transcripts
         )
 
         consensus_count = sum(
-            1
-            for t in transcripts
-            if t.get("conversation_summary", {}).get("consensus_reached") is True
+            1 for t in transcripts if t.get("conversation_summary", {}).get("consensus_reached") is True
         )
 
         all_errors = []
         for t in transcripts:
-            errors = (
-                t.get("conversation_summary", {})
-                .get("retry_statistics", {})
-                .get("validation_errors_summary", [])
-            )
+            errors = t.get("conversation_summary", {}).get("retry_statistics", {}).get("validation_errors_summary", [])
             all_errors.extend(errors)
 
         aggregated_errors = self.aggregate_validation_errors(all_errors)
@@ -591,8 +563,6 @@ class MetricsCollector:
             if successful_conversations > 0
             else 0.0,
             "total_tokens_used": total_tokens_all,
-            "average_tokens_per_conversation": total_tokens_all / total_conversations
-            if total_conversations > 0
-            else 0,
+            "average_tokens_per_conversation": total_tokens_all / total_conversations if total_conversations > 0 else 0,
             "error_summary": aggregated_errors,
         }

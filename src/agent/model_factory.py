@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Union, TYPE_CHECKING
 from .async_ollama_agent import AsyncOllamaAgent
+from .async_openai_agent import AsyncOpenAIAgent
+from .async_anthropic_agent import AsyncAnthropicAgent
 
 if TYPE_CHECKING:
     from .async_vllm_agent import AsyncVLLMAgent
@@ -36,9 +38,7 @@ class ModelFactory:
         # Cache for shared model instances (not used for Ollama, prepared for vLLM)
         self._shared_instances = {}
 
-    def _resolve_model_config(
-        self, agent_config: Dict[str, Any]
-    ) -> tuple[str, Dict[str, Any], str]:
+    def _resolve_model_config(self, agent_config: Dict[str, Any]) -> tuple[str, Dict[str, Any], str]:
         """Resolve model name, config, and backend from agent config.
 
         Args:
@@ -54,8 +54,7 @@ class ModelFactory:
 
         if model_name not in self.model_definitions:
             raise ValueError(
-                f"Model '{model_name}' not found in model definitions. "
-                f"Available: {list(self.model_definitions.keys())}"
+                f"Model '{model_name}' not found in model definitions. Available: {list(self.model_definitions.keys())}"
             )
 
         model_config = self.model_definitions[model_name]
@@ -63,16 +62,14 @@ class ModelFactory:
 
         return model_name, model_config, backend
 
-    def create_agent(
-        self, agent_config: Dict[str, Any]
-    ) -> Union[AsyncOllamaAgent, AsyncVLLMAgent]:
+    def create_agent(self, agent_config: Dict[str, Any]) -> Union[AsyncOllamaAgent, AsyncOpenAIAgent, "AsyncVLLMAgent"]:
         """Create an async agent instance based on configuration.
 
         Args:
             agent_config: Agent configuration dictionary
 
         Returns:
-            Agent instance (AsyncOllamaAgent or AsyncVLLMAgent)
+            Agent instance (AsyncOllamaAgent, AsyncOpenAIAgent, or AsyncVLLMAgent)
 
         Raises:
             ValueError: If configuration is invalid
@@ -83,10 +80,12 @@ class ModelFactory:
             return self._create_async_ollama_agent(agent_config, model_config)
         elif backend == "vllm":
             return self._create_async_vllm_agent(agent_config, model_config)
+        elif backend == "openai":
+            return self._create_async_openai_agent(agent_config, model_config)
+        elif backend == "anthropic":
+            return self._create_async_anthropic_agent(agent_config, model_config)
         else:
-            raise ValueError(
-                f"Unsupported backend: {backend}. Supported backends: ollama, vllm"
-            )
+            raise ValueError(f"Unsupported backend: {backend}. Supported backends: ollama, vllm, openai, anthropic")
 
     def _get_backend(self, model_name: str, model_config: Dict[str, Any]) -> str:
         """Get backend from model configuration.
@@ -103,10 +102,7 @@ class ModelFactory:
         """
         backend = model_config.get("backend")
         if not backend:
-            raise ValueError(
-                f"Model '{model_name}' missing required 'backend' field. "
-                "Must be 'vllm' or 'ollama'."
-            )
+            raise ValueError(f"Model '{model_name}' missing required 'backend' field. Must be 'vllm' or 'ollama'.")
         return backend
 
     def _create_async_ollama_agent(
@@ -124,15 +120,53 @@ class ModelFactory:
         # Ensure model_name is present for Ollama
         if "model_name" not in model_config:
             raise ValueError(
-                "Ollama backend requires 'model_name' in model configuration. "
-                "Example: 'llama3.2:1b-instruct-q4_K_M'"
+                "Ollama backend requires 'model_name' in model configuration. Example: 'llama3.2:1b-instruct-q4_K_M'"
             )
 
         return AsyncOllamaAgent(agent_config, model_config)
 
-    def _create_async_vllm_agent(
+    def _create_async_openai_agent(
         self, agent_config: Dict[str, Any], model_config: Dict[str, Any]
-    ) -> "AsyncVLLMAgent":
+    ) -> AsyncOpenAIAgent:
+        """Create an async OpenAI agent instance.
+
+        Args:
+            agent_config: Agent configuration
+            model_config: Model configuration
+
+        Returns:
+            AsyncOpenAIAgent instance
+        """
+        # OpenAI backend requires a provider model id (model_path accepted as alias)
+        if "model_name" not in model_config and "model_path" not in model_config:
+            raise ValueError(
+                "OpenAI backend requires 'model_name' (provider model id) in model configuration. Example: 'gpt-5.5'"
+            )
+
+        return AsyncOpenAIAgent(agent_config, model_config)
+
+    def _create_async_anthropic_agent(
+        self, agent_config: Dict[str, Any], model_config: Dict[str, Any]
+    ) -> AsyncAnthropicAgent:
+        """Create an async Anthropic (Claude) agent instance.
+
+        Args:
+            agent_config: Agent configuration
+            model_config: Model configuration
+
+        Returns:
+            AsyncAnthropicAgent instance
+        """
+        # Anthropic backend requires a provider model id (model_path accepted as alias)
+        if "model_name" not in model_config and "model_path" not in model_config:
+            raise ValueError(
+                "Anthropic backend requires 'model_name' (provider model id) in "
+                "model configuration. Example: 'claude-sonnet-4-6'"
+            )
+
+        return AsyncAnthropicAgent(agent_config, model_config)
+
+    def _create_async_vllm_agent(self, agent_config: Dict[str, Any], model_config: Dict[str, Any]) -> "AsyncVLLMAgent":
         """Create an async vLLM agent instance with batching support.
 
         Args:
