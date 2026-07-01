@@ -1,6 +1,6 @@
 # Multi-Agent Conversation Framework for Fairness Evaluation
 
-A lightweight framework for running multi-agent conversations with structured output validation. Agents can be instantiated from different model families (Gemma, Llama, Qwen, etc.) with configurable roles, personas, and demographics.
+A lightweight framework for running multi-agent conversations with structured output validation. Agents can be instantiated from different model families (Claude, GPT, GLM, Qwen, Gemma, Llama, Mistral, etc.) with configurable roles, personas, and demographics.
 
 > **New to this project?** Start with the [dev_ollama_walkthrough.ipynb](docs/guide/dev_ollama_walkthrough.ipynb) - a complete demo you can run locally without GPU using Ollama.
 
@@ -70,6 +70,8 @@ uv pip install -e .
 
 > **Note**: When enabling live status display `MAC_FAIRNESS_LIVE_STATUS=1`, disable the debug flag `MAC_FAIRNESS_DEBUG_FLAG=0`
 
+> **Note**: Hosted API backends (`openai`, `anthropic`) require a provider API key. By default they read `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, but the variable name is configurable per model via `api_config.api_key_env`, and `api_config.base_url` can point to any OpenAI/Anthropic-compatible endpoint.
+
 ---
 
 ## 3. Repository Structure
@@ -135,7 +137,9 @@ $MAC_FAIRNESS_WORKSPACE/
 │
 ├── src/                                    # Source code
 │   ├── agent/                              # Agent implementations
+│   │   ├── async_anthropic_agent.py        # Async Anthropic agent for hosted inference
 │   │   ├── async_ollama_agent.py           # Async Ollama agent for local dev (no GPU required)
+│   │   ├── async_openai_agent.py           # Async OpenAI agent for hosted inference
 │   │   ├── async_vllm_agent.py             # Async vLLM agent for production (GPU required)
 │   │   ├── base_agent.py                   # Abstract base class with shared functionality
 │   │   └── model_factory.py                # Smart backend detection and agent creation
